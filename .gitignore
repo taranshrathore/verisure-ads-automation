@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+
+# Secrets
+.env
+*.pem
+*.key
+*.crt
+
+# Cursor
+.cursor/
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Database
+*.db
+
+# Logs
+*.log
+
+# Build
+dist/
+build/
+
+# Testing
+.pytest_cache/
+
+# Coverage
+.coverage
+htmlcov/
+
+# Alembic
+alembic/versions/*.pyc
