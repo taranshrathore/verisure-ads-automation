@@ -4,7 +4,7 @@
 class AppError(Exception):
     """Base class for all application-specific exceptions."""
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str = "Application error.") -> None:
         self.message = message
         super().__init__(message)
 
