@@ -1,3 +1,113 @@
 """Shared FastAPI dependency providers for the API layer."""
 
-# TODO: Define reusable dependencies (e.g. DB session, auth context, settings).
+from collections.abc import Iterator
+from uuid import UUID
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+from jwt import PyJWTError
+from sqlalchemy.orm import Session
+
+from app.core.security.jwt import decode_access_token
+from app.database.session import SessionFactory
+from app.models.user import User
+from app.repositories.refresh_token_repository import RefreshTokenRepository
+from app.repositories.tenant_repository import TenantRepository
+from app.repositories.user_repository import UserRepository
+from app.services.auth_service import AuthService
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
+
+
+def get_db() -> Iterator[Session]:
+    """Yield a request-scoped SQLAlchemy session, always closed afterward."""
+    session_factory = SessionFactory()
+    session = session_factory()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+def get_tenant_repository(db: Session = Depends(get_db)) -> TenantRepository:
+    """Provide a TenantRepository bound to the request session."""
+    return TenantRepository(db)
+
+
+def get_user_repository(db: Session = Depends(get_db)) -> UserRepository:
+    """Provide a UserRepository bound to the request session."""
+    return UserRepository(db)
+
+
+def get_refresh_token_repository(
+    db: Session = Depends(get_db),
+) -> RefreshTokenRepository:
+    """Provide a RefreshTokenRepository bound to the request session."""
+    return RefreshTokenRepository(db)
+
+
+def get_auth_service(
+    db: Session = Depends(get_db),
+    tenant_repository: TenantRepository = Depends(get_tenant_repository),
+    user_repository: UserRepository = Depends(get_user_repository),
+    refresh_token_repository: RefreshTokenRepository = Depends(
+        get_refresh_token_repository
+    ),
+) -> AuthService:
+    """Provide a freshly constructed AuthService for the current request."""
+    return AuthService(
+        tenant_repository=tenant_repository,
+        user_repository=user_repository,
+        refresh_token_repository=refresh_token_repository,
+        session=db,
+    )
+
+
+def _unauthorized(detail: str) -> HTTPException:
+    """Build a standard 401 Unauthorized error with a WWW-Authenticate header."""
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=detail,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+# TODO: Every authenticated request currently performs a database lookup for
+# both the tenant and the user (see below). This is intentional: it ensures a
+# still-valid, unexpired JWT cannot grant access after a user or tenant has
+# since been deleted/disabled. If profiling ever shows this lookup is a
+# bottleneck, consider caching — but no caching is implemented here yet.
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    tenant_repository: TenantRepository = Depends(get_tenant_repository),
+    user_repository: UserRepository = Depends(get_user_repository),
+) -> User:
+    """Resolve the authenticated, active user from a validated JWT access token."""
+    try:
+        claims = decode_access_token(token)
+    except PyJWTError as exc:
+        raise _unauthorized("Invalid or expired token.") from exc
+
+    if claims.get("type") != "access":
+        raise _unauthorized("Invalid token type.")
+
+    raw_tenant_id = claims.get("tenant_id")
+    raw_user_id = claims.get("sub")
+    if not raw_tenant_id or not raw_user_id:
+        raise _unauthorized("Malformed token claims.")
+
+    try:
+        tenant_id = UUID(raw_tenant_id)
+        user_id = UUID(raw_user_id)
+    except ValueError as exc:
+        raise _unauthorized("Malformed token claims.") from exc
+
+    tenant = tenant_repository.get_by_id(tenant_id)
+    if tenant is None or tenant.deleted_at is not None:
+        raise _unauthorized("Tenant not found or inactive.")
+
+    user = user_repository.get_by_id(tenant_id, user_id)
+    if user is None or user.deleted_at is not None:
+        raise _unauthorized("User not found or inactive.")
+
+    return user
