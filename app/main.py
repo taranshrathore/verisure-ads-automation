@@ -1,4 +1,17 @@
 """FastAPI application entrypoint for VeriSure ad automation."""
 
-# TODO: Create and configure the FastAPI application instance.
-# TODO: Register API routers, middleware, and lifecycle hooks.
+from fastapi import FastAPI
+
+app = FastAPI(
+    title="VeriSure Ad Automation API",
+    version="0.1.0",
+)
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {
+        "status": "healthy",
+        "service": "verisure-ad-automation",
+        "version": "0.1.0",
+    }
