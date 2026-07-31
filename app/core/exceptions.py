@@ -83,3 +83,61 @@ class UserInactiveError(AppError):
 
     def __init__(self, message: str = "User is inactive.") -> None:
         super().__init__(message)
+
+
+class AuthorizationError(AppError):
+    """Base class for authorization-related failures."""
+
+    def __init__(self, message: str = "Authorization failed.") -> None:
+        super().__init__(message)
+
+
+class PermissionDeniedError(AuthorizationError):
+    """Raised when a caller lacks a required permission."""
+
+    def __init__(self, message: str = "Permission denied.") -> None:
+        super().__init__(message)
+
+
+class CrossTenantAccessError(AuthorizationError):
+    """Raised when a caller attempts to access another tenant's resource."""
+
+    def __init__(self, message: str = "Resource not found.") -> None:
+        super().__init__(message)
+
+
+class RoleNotFoundError(AppError):
+    """Raised when a role cannot be found."""
+
+    def __init__(self, message: str = "Role not found.") -> None:
+        super().__init__(message)
+
+
+class PermissionNotFoundError(AppError):
+    """Raised when a permission cannot be found."""
+
+    def __init__(self, message: str = "Permission not found.") -> None:
+        super().__init__(message)
+
+
+class RoleAssignmentConflictError(AppError):
+    """Raised when a role assignment conflicts with an existing one."""
+
+    def __init__(self, message: str = "Role assignment already exists.") -> None:
+        super().__init__(message)
+
+
+class ProtectedRoleError(AppError):
+    """Raised when a protected built-in role is modified."""
+
+    def __init__(self, message: str = "Protected role cannot be modified.") -> None:
+        super().__init__(message)
+
+
+class LastTenantAdminError(AppError):
+    """Raised when an operation would remove a tenant's final administrator."""
+
+    def __init__(
+        self, message: str = "A tenant must retain at least one active administrator."
+    ) -> None:
+        super().__init__(message)

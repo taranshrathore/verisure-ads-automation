@@ -5,6 +5,13 @@ from fastapi.responses import JSONResponse
 
 from app.core.exceptions import (
     AuthenticationError,
+    CrossTenantAccessError,
+    LastTenantAdminError,
+    PermissionDeniedError,
+    PermissionNotFoundError,
+    ProtectedRoleError,
+    RoleAssignmentConflictError,
+    RoleNotFoundError,
     TenantInactiveError,
     TenantNotFoundError,
     UserInactiveError,
@@ -66,3 +73,52 @@ def register_exception_handlers(app: FastAPI) -> None:
     ) -> JSONResponse:
         """Convert a UserInactiveError into a 403 response."""
         return _json_error(status.HTTP_403_FORBIDDEN, str(exc))
+
+    @app.exception_handler(PermissionDeniedError)
+    async def _handle_permission_denied(
+        request: Request, exc: PermissionDeniedError
+    ) -> JSONResponse:
+        """Convert a PermissionDeniedError into a 403 response."""
+        return _json_error(status.HTTP_403_FORBIDDEN, str(exc))
+
+    @app.exception_handler(CrossTenantAccessError)
+    async def _handle_cross_tenant_access(
+        request: Request, exc: CrossTenantAccessError
+    ) -> JSONResponse:
+        """Convert a CrossTenantAccessError into a 404 response."""
+        return _json_error(status.HTTP_404_NOT_FOUND, str(exc))
+
+    @app.exception_handler(RoleNotFoundError)
+    async def _handle_role_not_found(
+        request: Request, exc: RoleNotFoundError
+    ) -> JSONResponse:
+        """Convert a RoleNotFoundError into a 404 response."""
+        return _json_error(status.HTTP_404_NOT_FOUND, str(exc))
+
+    @app.exception_handler(PermissionNotFoundError)
+    async def _handle_permission_not_found(
+        request: Request, exc: PermissionNotFoundError
+    ) -> JSONResponse:
+        """Convert a PermissionNotFoundError into a 404 response."""
+        return _json_error(status.HTTP_404_NOT_FOUND, str(exc))
+
+    @app.exception_handler(RoleAssignmentConflictError)
+    async def _handle_role_assignment_conflict(
+        request: Request, exc: RoleAssignmentConflictError
+    ) -> JSONResponse:
+        """Convert a RoleAssignmentConflictError into a 409 response."""
+        return _json_error(status.HTTP_409_CONFLICT, str(exc))
+
+    @app.exception_handler(ProtectedRoleError)
+    async def _handle_protected_role(
+        request: Request, exc: ProtectedRoleError
+    ) -> JSONResponse:
+        """Convert a ProtectedRoleError into a 403 response."""
+        return _json_error(status.HTTP_403_FORBIDDEN, str(exc))
+
+    @app.exception_handler(LastTenantAdminError)
+    async def _handle_last_tenant_admin(
+        request: Request, exc: LastTenantAdminError
+    ) -> JSONResponse:
+        """Convert a LastTenantAdminError into a 409 response."""
+        return _json_error(status.HTTP_409_CONFLICT, str(exc))
