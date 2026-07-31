@@ -1,7 +1,9 @@
 """FastAPI application entrypoint for VeriSure ad automation."""
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.v1 import auth
 from app.core.logging import configure_logging
 from app.core.settings import settings
 
@@ -9,14 +11,34 @@ configure_logging()
 
 app = FastAPI(
     title=settings.app_name,
+    description="Multi-platform advertisement automation backend for VeriSure.",
     version="0.1.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
+
+# TODO: Restrict these CORS settings before deploying to production.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+api_v1_router = APIRouter(prefix="/api/v1")
+api_v1_router.include_router(auth.router)
+
+app.include_router(api_v1_router)
+
+
+@app.get("/")
+def root() -> dict[str, str]:
+    """Return a basic service identification payload."""
+    return {"message": f"{settings.app_name} is running.", "status": "ok"}
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {
-        "status": "healthy",
-        "service": settings.app_name,
-        "version": "0.1.0",
-    }
+def health() -> dict[str, str]:
+    """Return a lightweight liveness signal."""
+    return {"status": "healthy"}
