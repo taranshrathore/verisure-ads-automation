@@ -9,7 +9,9 @@ dependencies = [
     "alembic>=1.18.5",
     "fastapi>=0.141.1",
     "psycopg[binary]>=3.3.4",
+    "pwdlib[argon2]>=0.3.0",
     "pydantic-settings>=2.14.2",
+    "pyjwt>=2.13.0",
     "sqlalchemy>=2.0.51",
     "uvicorn>=0.52.0",
 ]

@@ -8,6 +8,8 @@ from fastapi.security import OAuth2PasswordBearer
 from jwt import PyJWTError
 from sqlalchemy.orm import Session
 
+from app.core.authorization.catalog import PLATFORM_TENANT_SLUG
+from app.core.authorization.context import AuthorizationContext
 from app.core.exceptions import (
     InvalidAccessTokenError,
     TenantInactiveError,
@@ -18,10 +20,12 @@ from app.core.exceptions import (
 from app.core.security.jwt import decode_access_token
 from app.database.session import SessionFactory
 from app.models.user import User
+from app.repositories.authorization_repository import AuthorizationRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.tenant_repository import TenantRepository
 from app.repositories.user_repository import UserRepository
 from app.services.auth_service import AuthService
+from app.services.authorization_service import AuthorizationService
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
 
@@ -68,6 +72,22 @@ def get_auth_service(
         refresh_token_repository=refresh_token_repository,
         session=db,
     )
+
+
+def get_authorization_repository(
+    db: Session = Depends(get_db),
+) -> AuthorizationRepository:
+    """Provide an AuthorizationRepository bound to the request session."""
+    return AuthorizationRepository(db)
+
+
+def get_authorization_service(
+    authorization_repository: AuthorizationRepository = Depends(
+        get_authorization_repository
+    ),
+) -> AuthorizationService:
+    """Provide a freshly constructed AuthorizationService for the current request."""
+    return AuthorizationService(authorization_repository)
 
 
 def _unauthorized(detail: str) -> HTTPException:
@@ -131,3 +151,19 @@ def get_current_user(
         UserInactiveError,
     ) as exc:
         raise _unauthorized(str(exc)) from exc
+
+
+def get_authorization_context(
+    current_user: User = Depends(get_current_user),
+    authorization_service: AuthorizationService = Depends(get_authorization_service),
+) -> AuthorizationContext:
+    """Build the caller's frozen authorization snapshot.
+
+    FastAPI's per-request dependency cache guarantees this runs at most once
+    per request, no matter how many permission checks the endpoint declares.
+    """
+    return authorization_service.build_context(
+        user_id=current_user.id,
+        tenant_id=current_user.tenant_id,
+        is_platform_tenant=current_user.tenant.slug == PLATFORM_TENANT_SLUG,
+    )
