@@ -2,7 +2,10 @@
 
 from fastapi import FastAPI
 
+from app.core.logging import configure_logging
 from app.core.settings import settings
+
+configure_logging()
 
 app = FastAPI(
     title=settings.app_name,
