@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     debug: bool = True
     api_version: str = "v1"
     database_url: str | None = None
+    jwt_secret_key: str
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 15
+    jwt_issuer: str = "verisure-api"
+    jwt_audience: str = "verisure-clients"
 
 
 @lru_cache
