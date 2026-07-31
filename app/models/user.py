@@ -24,6 +24,9 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("tenant_id", "email", name="uq_users_tenant_id_email"),
+        # Required as the referenced side of the composite FK from
+        # user_role_assignments(user_id, tenant_id) -> users(id, tenant_id).
+        UniqueConstraint("id", "tenant_id", name="uq_users_id_tenant_id"),
     )
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(
