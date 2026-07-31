@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     debug: bool = True
     api_version: str = "v1"
     database_url: str | None = None
+    # TEST_DATABASE_URL is read only by the pytest suite (app/tests/database.py)
+    # to build a separate engine/session, dedicated to a test database. The
+    # application itself never reads this field.
+    test_database_url: str | None = None
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 15
