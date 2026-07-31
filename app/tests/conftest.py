@@ -44,6 +44,8 @@ from app.models.system_role_assignment import SystemRoleAssignment
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.user_role_assignment import UserRoleAssignment
+from app.repositories.authorization_repository import AuthorizationRepository
+from app.services.authorization_service import AuthorizationService
 from app.tests.database import (
     TestDatabaseConfigurationError,
     get_test_engine,
@@ -219,5 +221,26 @@ def authorization_fixture(db_session: Session):
 
         token = create_access_token(user_id=user.id, tenant_id=tenant.id)
         return user, token
+
+    return make
+
+
+@pytest.fixture
+def authorization_context_factory(db_session: Session):
+    """Factory fixture building a real AuthorizationContext for a user.
+
+    Delegates to the real AuthorizationRepository/AuthorizationService
+    chain (no mocking) so service-level tests can obtain a context without
+    going through an HTTP request, exactly mirroring what
+    get_authorization_context does per-request in production.
+    """
+
+    def make(user: User, *, is_platform_tenant: bool = False):
+        authorization_service = AuthorizationService(AuthorizationRepository(db_session))
+        return authorization_service.build_context(
+            user_id=user.id,
+            tenant_id=user.tenant_id,
+            is_platform_tenant=is_platform_tenant,
+        )
 
     return make

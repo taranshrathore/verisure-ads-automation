@@ -25,3 +25,13 @@ class UserRepository:
         return self._session.scalar(
             select(User).where(User.tenant_id == tenant_id, User.email == email)
         )
+
+    def get_by_id_unscoped(self, user_id: UUID) -> User | None:
+        """Return a user by id alone, with no tenant scoping.
+
+        Restricted to platform-scoped operations (SystemRoleManagementService)
+        that must resolve which tenant a user belongs to before that tenant
+        is known. Ordinary tenant-scoped application code must use
+        get_by_id(tenant_id, user_id) instead.
+        """
+        return self._session.scalar(select(User).where(User.id == user_id))

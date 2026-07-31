@@ -9,6 +9,7 @@ from app.core.exceptions import (
     LastTenantAdminError,
     PermissionDeniedError,
     PermissionNotFoundError,
+    PlatformTenantRequiredError,
     ProtectedRoleError,
     RoleAssignmentConflictError,
     RoleNotFoundError,
@@ -122,3 +123,10 @@ def register_exception_handlers(app: FastAPI) -> None:
     ) -> JSONResponse:
         """Convert a LastTenantAdminError into a 409 response."""
         return _json_error(status.HTTP_409_CONFLICT, str(exc))
+
+    @app.exception_handler(PlatformTenantRequiredError)
+    async def _handle_platform_tenant_required(
+        request: Request, exc: PlatformTenantRequiredError
+    ) -> JSONResponse:
+        """Convert a PlatformTenantRequiredError into a 403 response."""
+        return _json_error(status.HTTP_403_FORBIDDEN, str(exc))

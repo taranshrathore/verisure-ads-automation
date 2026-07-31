@@ -22,10 +22,15 @@ from app.database.session import SessionFactory
 from app.models.user import User
 from app.repositories.authorization_repository import AuthorizationRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
+from app.repositories.role_repository import RoleRepository
 from app.repositories.tenant_repository import TenantRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.user_role_assignment_repository import (
+    UserRoleAssignmentRepository,
+)
 from app.services.auth_service import AuthService
 from app.services.authorization_service import AuthorizationService
+from app.services.role_management_service import RoleManagementService
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
 
@@ -88,6 +93,37 @@ def get_authorization_service(
 ) -> AuthorizationService:
     """Provide a freshly constructed AuthorizationService for the current request."""
     return AuthorizationService(authorization_repository)
+
+
+def get_role_repository(db: Session = Depends(get_db)) -> RoleRepository:
+    """Provide a RoleRepository bound to the request session."""
+    return RoleRepository(db)
+
+
+def get_user_role_assignment_repository(
+    db: Session = Depends(get_db),
+) -> UserRoleAssignmentRepository:
+    """Provide a UserRoleAssignmentRepository bound to the request session."""
+    return UserRoleAssignmentRepository(db)
+
+
+def get_role_management_service(
+    db: Session = Depends(get_db),
+    role_repository: RoleRepository = Depends(get_role_repository),
+    user_role_assignment_repository: UserRoleAssignmentRepository = Depends(
+        get_user_role_assignment_repository
+    ),
+    user_repository: UserRepository = Depends(get_user_repository),
+    tenant_repository: TenantRepository = Depends(get_tenant_repository),
+) -> RoleManagementService:
+    """Provide a freshly constructed RoleManagementService for the current request."""
+    return RoleManagementService(
+        role_repository=role_repository,
+        user_role_assignment_repository=user_role_assignment_repository,
+        user_repository=user_repository,
+        tenant_repository=tenant_repository,
+        session=db,
+    )
 
 
 def _unauthorized(detail: str) -> HTTPException:

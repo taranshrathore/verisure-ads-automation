@@ -141,3 +141,13 @@ class LastTenantAdminError(AppError):
         self, message: str = "A tenant must retain at least one active administrator."
     ) -> None:
         super().__init__(message)
+
+
+class PlatformTenantRequiredError(AppError):
+    """Raised when a system-role grant targets a user outside the platform tenant."""
+
+    def __init__(
+        self,
+        message: str = "System roles may only be granted to platform-tenant users.",
+    ) -> None:
+        super().__init__(message)
