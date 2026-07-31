@@ -8,6 +8,13 @@ from fastapi.security import OAuth2PasswordBearer
 from jwt import PyJWTError
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import (
+    InvalidAccessTokenError,
+    TenantInactiveError,
+    TenantNotFoundError,
+    UserInactiveError,
+    UserNotFoundError,
+)
 from app.core.security.jwt import decode_access_token
 from app.database.session import SessionFactory
 from app.models.user import User
@@ -84,30 +91,43 @@ def get_current_user(
 ) -> User:
     """Resolve the authenticated, active user from a validated JWT access token."""
     try:
-        claims = decode_access_token(token)
-    except PyJWTError as exc:
-        raise _unauthorized("Invalid or expired token.") from exc
+        try:
+            claims = decode_access_token(token)
+        except PyJWTError as exc:
+            raise InvalidAccessTokenError() from exc
 
-    if claims.get("type") != "access":
-        raise _unauthorized("Invalid token type.")
+        if claims.get("type") != "access":
+            raise InvalidAccessTokenError("Invalid token type.")
 
-    raw_tenant_id = claims.get("tenant_id")
-    raw_user_id = claims.get("sub")
-    if not raw_tenant_id or not raw_user_id:
-        raise _unauthorized("Malformed token claims.")
+        raw_tenant_id = claims.get("tenant_id")
+        raw_user_id = claims.get("sub")
+        if not raw_tenant_id or not raw_user_id:
+            raise InvalidAccessTokenError("Malformed token claims.")
 
-    try:
-        tenant_id = UUID(raw_tenant_id)
-        user_id = UUID(raw_user_id)
-    except ValueError as exc:
-        raise _unauthorized("Malformed token claims.") from exc
+        try:
+            tenant_id = UUID(raw_tenant_id)
+            user_id = UUID(raw_user_id)
+        except ValueError as exc:
+            raise InvalidAccessTokenError("Malformed token claims.") from exc
 
-    tenant = tenant_repository.get_by_id(tenant_id)
-    if tenant is None or tenant.deleted_at is not None:
-        raise _unauthorized("Tenant not found or inactive.")
+        tenant = tenant_repository.get_by_id(tenant_id)
+        if tenant is None:
+            raise TenantNotFoundError()
+        if tenant.deleted_at is not None:
+            raise TenantInactiveError()
 
-    user = user_repository.get_by_id(tenant_id, user_id)
-    if user is None or user.deleted_at is not None:
-        raise _unauthorized("User not found or inactive.")
+        user = user_repository.get_by_id(tenant_id, user_id)
+        if user is None:
+            raise UserNotFoundError()
+        if user.deleted_at is not None:
+            raise UserInactiveError()
 
-    return user
+        return user
+    except (
+        InvalidAccessTokenError,
+        TenantNotFoundError,
+        TenantInactiveError,
+        UserNotFoundError,
+        UserInactiveError,
+    ) as exc:
+        raise _unauthorized(str(exc)) from exc

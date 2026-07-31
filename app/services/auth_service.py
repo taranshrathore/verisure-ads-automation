@@ -9,6 +9,14 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import (
+    InvalidCredentialsError,
+    InvalidRefreshTokenError,
+    RefreshTokenExpiredError,
+    RefreshTokenRevokedError,
+    RefreshTokenReuseError,
+    UserNotFoundError,
+)
 from app.core.security.jwt import create_access_token
 from app.core.security.password import verify_password
 from app.core.security.tokens import generate_refresh_token, hash_token
@@ -48,14 +56,14 @@ class AuthService:
         """Authenticate a user and issue a new access/refresh token pair."""
         tenant = self._tenants.get_by_slug(tenant_slug)
         if tenant is None or tenant.deleted_at is not None:
-            raise ValueError("Invalid tenant, email, or password.")
+            raise InvalidCredentialsError()
 
         user = self._users.get_by_tenant_and_email(tenant.id, email)
         if user is None or user.deleted_at is not None:
-            raise ValueError("Invalid tenant, email, or password.")
+            raise InvalidCredentialsError()
 
         if not verify_password(password, user.hashed_password):
-            raise ValueError("Invalid tenant, email, or password.")
+            raise InvalidCredentialsError()
 
         now = datetime.now(timezone.utc)
         raw_refresh_token = generate_refresh_token()
@@ -90,7 +98,7 @@ class AuthService:
         """Validate and rotate a refresh token, revoking its family on reuse."""
         existing = self._refresh_tokens.get_by_token_hash(hash_token(raw_refresh_token))
         if existing is None:
-            raise ValueError("Invalid refresh token.")
+            raise InvalidRefreshTokenError()
 
         now = datetime.now(timezone.utc)
 
@@ -101,13 +109,13 @@ class AuthService:
             except Exception:
                 self._session.rollback()
                 raise
-            raise ValueError("Refresh token reuse detected; session revoked.")
+            raise RefreshTokenReuseError()
 
         if existing.revoked_at is not None:
-            raise ValueError("Refresh token has been revoked.")
+            raise RefreshTokenRevokedError()
 
         if existing.expires_at <= now:
-            raise ValueError("Refresh token has expired.")
+            raise RefreshTokenExpiredError()
 
         new_token_id = uuid.uuid4()
         raw_new_refresh_token = generate_refresh_token()
@@ -139,7 +147,7 @@ class AuthService:
         """Revoke a single refresh token."""
         existing = self._refresh_tokens.get_by_token_hash(hash_token(raw_refresh_token))
         if existing is None:
-            raise ValueError("Invalid refresh token.")
+            raise InvalidRefreshTokenError()
 
         self._refresh_tokens.revoke(existing.id)
         try:
@@ -152,7 +160,7 @@ class AuthService:
         """Revoke all active refresh tokens for a tenant-scoped user."""
         user = self._users.get_by_id(tenant_id, user_id)
         if user is None:
-            raise ValueError("User not found.")
+            raise UserNotFoundError()
 
         self._refresh_tokens.revoke_all_for_user(user_id)
         try:

@@ -4,10 +4,32 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict
 
 from app.api.dependencies import get_auth_service, get_current_user
+from app.core.exceptions import (
+    AuthenticationError,
+    TenantInactiveError,
+    TenantNotFoundError,
+    UserInactiveError,
+    UserNotFoundError,
+)
 from app.models.user import User
 from app.services.auth_service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+_AuthFailure = (
+    AuthenticationError
+    | TenantNotFoundError
+    | TenantInactiveError
+    | UserNotFoundError
+    | UserInactiveError
+)
+_AUTH_FAILURE_EXCEPTIONS = (
+    AuthenticationError,
+    TenantNotFoundError,
+    TenantInactiveError,
+    UserNotFoundError,
+    UserInactiveError,
+)
 
 
 class LoginRequest(BaseModel):
@@ -45,8 +67,8 @@ class TokenResponse(BaseModel):
     refresh_token: str
 
 
-def _unauthorized(exc: ValueError) -> HTTPException:
-    """Convert an AuthService ValueError into a 401 HTTPException."""
+def _unauthorized(exc: _AuthFailure) -> HTTPException:
+    """Convert an authentication-related failure into a 401 HTTPException."""
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail=str(exc),
@@ -74,7 +96,7 @@ def login(
             email=payload.email,
             password=payload.password,
         )
-    except ValueError as exc:
+    except _AUTH_FAILURE_EXCEPTIONS as exc:
         raise _unauthorized(exc) from exc
 
     return TokenResponse(
@@ -100,7 +122,7 @@ def refresh(
     """Rotate a refresh token and issue a new access/refresh token pair."""
     try:
         token_pair = auth_service.refresh(payload.refresh_token)
-    except ValueError as exc:
+    except _AUTH_FAILURE_EXCEPTIONS as exc:
         raise _unauthorized(exc) from exc
 
     return TokenResponse(
@@ -122,7 +144,7 @@ def logout(
     """Revoke a single refresh token."""
     try:
         auth_service.logout(payload.refresh_token)
-    except ValueError as exc:
+    except _AUTH_FAILURE_EXCEPTIONS as exc:
         raise _unauthorized(exc) from exc
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -144,7 +166,7 @@ def logout_all(
         auth_service.logout_all(
             tenant_id=current_user.tenant_id, user_id=current_user.id
         )
-    except ValueError as exc:
+    except _AUTH_FAILURE_EXCEPTIONS as exc:
         raise _unauthorized(exc) from exc
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
