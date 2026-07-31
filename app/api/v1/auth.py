@@ -1,35 +1,13 @@
 """Authentication API endpoints: login, refresh, logout, and logout-all."""
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Response, status
 from pydantic import BaseModel, ConfigDict
 
 from app.api.dependencies import get_auth_service, get_current_user
-from app.core.exceptions import (
-    AuthenticationError,
-    TenantInactiveError,
-    TenantNotFoundError,
-    UserInactiveError,
-    UserNotFoundError,
-)
 from app.models.user import User
 from app.services.auth_service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-_AuthFailure = (
-    AuthenticationError
-    | TenantNotFoundError
-    | TenantInactiveError
-    | UserNotFoundError
-    | UserInactiveError
-)
-_AUTH_FAILURE_EXCEPTIONS = (
-    AuthenticationError,
-    TenantNotFoundError,
-    TenantInactiveError,
-    UserNotFoundError,
-    UserInactiveError,
-)
 
 
 class LoginRequest(BaseModel):
@@ -67,15 +45,6 @@ class TokenResponse(BaseModel):
     refresh_token: str
 
 
-def _unauthorized(exc: _AuthFailure) -> HTTPException:
-    """Convert an authentication-related failure into a 401 HTTPException."""
-    return HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail=str(exc),
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-
 @router.post(
     "/login",
     status_code=status.HTTP_200_OK,
@@ -90,14 +59,11 @@ def login(
     auth_service: AuthService = Depends(get_auth_service),
 ) -> TokenResponse:
     """Authenticate a tenant-scoped user and issue a new token pair."""
-    try:
-        token_pair = auth_service.login(
-            tenant_slug=payload.tenant_slug,
-            email=payload.email,
-            password=payload.password,
-        )
-    except _AUTH_FAILURE_EXCEPTIONS as exc:
-        raise _unauthorized(exc) from exc
+    token_pair = auth_service.login(
+        tenant_slug=payload.tenant_slug,
+        email=payload.email,
+        password=payload.password,
+    )
 
     return TokenResponse(
         access_token=token_pair.access_token,
@@ -120,10 +86,7 @@ def refresh(
     auth_service: AuthService = Depends(get_auth_service),
 ) -> TokenResponse:
     """Rotate a refresh token and issue a new access/refresh token pair."""
-    try:
-        token_pair = auth_service.refresh(payload.refresh_token)
-    except _AUTH_FAILURE_EXCEPTIONS as exc:
-        raise _unauthorized(exc) from exc
+    token_pair = auth_service.refresh(payload.refresh_token)
 
     return TokenResponse(
         access_token=token_pair.access_token,
@@ -142,10 +105,7 @@ def logout(
     auth_service: AuthService = Depends(get_auth_service),
 ) -> Response:
     """Revoke a single refresh token."""
-    try:
-        auth_service.logout(payload.refresh_token)
-    except _AUTH_FAILURE_EXCEPTIONS as exc:
-        raise _unauthorized(exc) from exc
+    auth_service.logout(payload.refresh_token)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -162,11 +122,8 @@ def logout_all(
     auth_service: AuthService = Depends(get_auth_service),
 ) -> Response:
     """Revoke all active refresh tokens for the authenticated user."""
-    try:
-        auth_service.logout_all(
-            tenant_id=current_user.tenant_id, user_id=current_user.id
-        )
-    except _AUTH_FAILURE_EXCEPTIONS as exc:
-        raise _unauthorized(exc) from exc
+    auth_service.logout_all(
+        tenant_id=current_user.tenant_id, user_id=current_user.id
+    )
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)

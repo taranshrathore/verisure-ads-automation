@@ -4,6 +4,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import auth
+from app.core.exception_handlers import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.settings import settings
 
@@ -16,6 +17,7 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+register_exception_handlers(app)
 
 # TODO: Restrict these CORS settings before deploying to production.
 app.add_middleware(
