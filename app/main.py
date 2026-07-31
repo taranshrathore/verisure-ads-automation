@@ -2,8 +2,10 @@
 
 from fastapi import FastAPI
 
+from app.core.settings import settings
+
 app = FastAPI(
-    title="VeriSure Ad Automation API",
+    title=settings.app_name,
     version="0.1.0",
 )
 
@@ -12,6 +14,6 @@ app = FastAPI(
 async def health() -> dict[str, str]:
     return {
         "status": "healthy",
-        "service": "verisure-ad-automation",
+        "service": settings.app_name,
         "version": "0.1.0",
     }
