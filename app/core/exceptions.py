@@ -119,6 +119,32 @@ class CampaignValidationError(AppError):
         super().__init__(message)
 
 
+class CampaignDeploymentNotFoundError(AppError):
+    """Raised when a deployment cannot be found within the caller's tenant.
+
+    Also used for cross-tenant lookups (a deployment that exists but
+    belongs to a different tenant) -- deliberately indistinguishable from
+    a genuinely missing deployment, matching CampaignNotFoundError's
+    existing pattern, to avoid leaking cross-tenant existence.
+    """
+
+    def __init__(self, message: str = "Campaign deployment not found.") -> None:
+        super().__init__(message)
+
+
+class InvalidCampaignDeploymentStateError(AppError):
+    """Raised when a lifecycle transition is attempted against a
+    deployment whose current status does not allow it (e.g. marking a
+    pending deployment live without first marking it submitted).
+    """
+
+    def __init__(
+        self,
+        message: str = "Campaign deployment is not in a valid state for this operation.",
+    ) -> None:
+        super().__init__(message)
+
+
 # NOTE: The local RBAC exception hierarchy (AuthorizationError,
 # PermissionDeniedError, CrossTenantAccessError, RoleNotFoundError,
 # PermissionNotFoundError, RoleAssignmentConflictError, ProtectedRoleError,

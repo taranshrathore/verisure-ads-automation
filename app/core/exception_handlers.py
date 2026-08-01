@@ -5,8 +5,10 @@ from fastapi.responses import JSONResponse
 
 from app.core.exceptions import (
     AuthenticationError,
+    CampaignDeploymentNotFoundError,
     CampaignNotFoundError,
     CampaignValidationError,
+    InvalidCampaignDeploymentStateError,
     InvalidCampaignStateError,
     TenantInactiveError,
     TenantNotFoundError,
@@ -97,3 +99,17 @@ def register_exception_handlers(app: FastAPI) -> None:
     ) -> JSONResponse:
         """Convert a CampaignValidationError into a 422 response."""
         return _json_error(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
+
+    @app.exception_handler(CampaignDeploymentNotFoundError)
+    async def _handle_campaign_deployment_not_found(
+        request: Request, exc: CampaignDeploymentNotFoundError
+    ) -> JSONResponse:
+        """Convert a CampaignDeploymentNotFoundError into a 404 response."""
+        return _json_error(status.HTTP_404_NOT_FOUND, str(exc))
+
+    @app.exception_handler(InvalidCampaignDeploymentStateError)
+    async def _handle_invalid_campaign_deployment_state(
+        request: Request, exc: InvalidCampaignDeploymentStateError
+    ) -> JSONResponse:
+        """Convert an InvalidCampaignDeploymentStateError into a 409 response."""
+        return _json_error(status.HTTP_409_CONFLICT, str(exc))

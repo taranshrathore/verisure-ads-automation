@@ -52,18 +52,23 @@ def _run_alembic(*args: str, database_url: str) -> subprocess.CompletedProcess:
 
 
 def test_migration_downgrade_and_upgrade_round_trip() -> None:
-    """Downgrading one revision then upgrading back to head succeeds
+    """Downgrading past 836f99e46ed7 then upgrading back to it succeeds
     cleanly, and the campaigns table's presence tracks each step.
+
+    This targets 836f99e46ed7 by explicit revision ID rather than a
+    relative "-1" from head: later migrations (e.g. 0d7ba5dd4102) are
+    layered on top of it, so "-1" from head would toggle whatever
+    migration is currently topmost instead of this one.
     """
     test_url = resolve_test_database_url()
     engine = get_test_engine()
 
     try:
-        _run_alembic("downgrade", "-1", database_url=test_url)
+        _run_alembic("downgrade", "c4d8f1a9b6e3", database_url=test_url)
         with engine.connect() as connection:
             assert "campaigns" not in inspect(connection).get_table_names()
 
-        _run_alembic("upgrade", "head", database_url=test_url)
+        _run_alembic("upgrade", "836f99e46ed7", database_url=test_url)
         with engine.connect() as connection:
             assert "campaigns" in inspect(connection).get_table_names()
     finally:

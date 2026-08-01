@@ -28,6 +28,7 @@ from sqlalchemy import (
     Index,
     Numeric,
     String,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -102,6 +103,13 @@ class Campaign(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
             ["users.id", "users.tenant_id"],
             name="fk_campaigns_created_by_user_id_tenant_id_users",
         ),
+        # Required so CampaignDeployment can hold a composite FK
+        # (campaign_id, tenant_id) -> campaigns(id, tenant_id), the same
+        # structural pattern used for the creator FK above. id alone is
+        # already the primary key, but PostgreSQL still requires an
+        # explicit unique constraint on the exact (id, tenant_id) column
+        # pair for a composite FK to reference it.
+        UniqueConstraint("id", "tenant_id", name="uq_campaigns_id_tenant_id"),
         CheckConstraint(
             "(budget_type IS NULL AND budget_amount IS NULL AND currency IS NULL) "
             "OR (budget_type IS NOT NULL AND budget_amount IS NOT NULL AND currency IS NOT NULL)",
