@@ -1,6 +1,5 @@
 """Tenant model: the top-level organizational unit for multi-tenancy."""
 
-import uuid
 from typing import TYPE_CHECKING
 
 from sqlalchemy import String

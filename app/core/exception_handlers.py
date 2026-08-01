@@ -5,14 +5,9 @@ from fastapi.responses import JSONResponse
 
 from app.core.exceptions import (
     AuthenticationError,
-    CrossTenantAccessError,
-    LastTenantAdminError,
-    PermissionDeniedError,
-    PermissionNotFoundError,
-    PlatformTenantRequiredError,
-    ProtectedRoleError,
-    RoleAssignmentConflictError,
-    RoleNotFoundError,
+    CampaignNotFoundError,
+    CampaignValidationError,
+    InvalidCampaignStateError,
     TenantInactiveError,
     TenantNotFoundError,
     UserInactiveError,
@@ -34,7 +29,14 @@ def _json_error(
 
 
 def register_exception_handlers(app: FastAPI) -> None:
-    """Register centralized exception handlers on the FastAPI application."""
+    """Register centralized exception handlers on the FastAPI application.
+
+    NOTE: handlers for the local RBAC exception hierarchy (PermissionDeniedError,
+    CrossTenantAccessError, RoleNotFoundError, PermissionNotFoundError,
+    RoleAssignmentConflictError, ProtectedRoleError, LastTenantAdminError,
+    PlatformTenantRequiredError) were removed along with that engine -- see
+    docs/HANDOFF.md for the CRM migration status.
+    """
 
     @app.exception_handler(AuthenticationError)
     async def _handle_authentication_error(
@@ -75,58 +77,23 @@ def register_exception_handlers(app: FastAPI) -> None:
         """Convert a UserInactiveError into a 403 response."""
         return _json_error(status.HTTP_403_FORBIDDEN, str(exc))
 
-    @app.exception_handler(PermissionDeniedError)
-    async def _handle_permission_denied(
-        request: Request, exc: PermissionDeniedError
+    @app.exception_handler(CampaignNotFoundError)
+    async def _handle_campaign_not_found(
+        request: Request, exc: CampaignNotFoundError
     ) -> JSONResponse:
-        """Convert a PermissionDeniedError into a 403 response."""
-        return _json_error(status.HTTP_403_FORBIDDEN, str(exc))
-
-    @app.exception_handler(CrossTenantAccessError)
-    async def _handle_cross_tenant_access(
-        request: Request, exc: CrossTenantAccessError
-    ) -> JSONResponse:
-        """Convert a CrossTenantAccessError into a 404 response."""
+        """Convert a CampaignNotFoundError into a 404 response."""
         return _json_error(status.HTTP_404_NOT_FOUND, str(exc))
 
-    @app.exception_handler(RoleNotFoundError)
-    async def _handle_role_not_found(
-        request: Request, exc: RoleNotFoundError
+    @app.exception_handler(InvalidCampaignStateError)
+    async def _handle_invalid_campaign_state(
+        request: Request, exc: InvalidCampaignStateError
     ) -> JSONResponse:
-        """Convert a RoleNotFoundError into a 404 response."""
-        return _json_error(status.HTTP_404_NOT_FOUND, str(exc))
-
-    @app.exception_handler(PermissionNotFoundError)
-    async def _handle_permission_not_found(
-        request: Request, exc: PermissionNotFoundError
-    ) -> JSONResponse:
-        """Convert a PermissionNotFoundError into a 404 response."""
-        return _json_error(status.HTTP_404_NOT_FOUND, str(exc))
-
-    @app.exception_handler(RoleAssignmentConflictError)
-    async def _handle_role_assignment_conflict(
-        request: Request, exc: RoleAssignmentConflictError
-    ) -> JSONResponse:
-        """Convert a RoleAssignmentConflictError into a 409 response."""
+        """Convert an InvalidCampaignStateError into a 409 response."""
         return _json_error(status.HTTP_409_CONFLICT, str(exc))
 
-    @app.exception_handler(ProtectedRoleError)
-    async def _handle_protected_role(
-        request: Request, exc: ProtectedRoleError
+    @app.exception_handler(CampaignValidationError)
+    async def _handle_campaign_validation_error(
+        request: Request, exc: CampaignValidationError
     ) -> JSONResponse:
-        """Convert a ProtectedRoleError into a 403 response."""
-        return _json_error(status.HTTP_403_FORBIDDEN, str(exc))
-
-    @app.exception_handler(LastTenantAdminError)
-    async def _handle_last_tenant_admin(
-        request: Request, exc: LastTenantAdminError
-    ) -> JSONResponse:
-        """Convert a LastTenantAdminError into a 409 response."""
-        return _json_error(status.HTTP_409_CONFLICT, str(exc))
-
-    @app.exception_handler(PlatformTenantRequiredError)
-    async def _handle_platform_tenant_required(
-        request: Request, exc: PlatformTenantRequiredError
-    ) -> JSONResponse:
-        """Convert a PlatformTenantRequiredError into a 403 response."""
-        return _json_error(status.HTTP_403_FORBIDDEN, str(exc))
+        """Convert a CampaignValidationError into a 422 response."""
+        return _json_error(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))

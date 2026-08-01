@@ -1,4 +1,23 @@
-"""Shared FastAPI dependency providers for the API layer."""
+"""Shared FastAPI dependency providers for the API layer.
+
+TEMPORARY / CRM-MIGRATION STATE: the database-backed authorization engine
+(get_authorization_context, AuthorizationService/Repository, and the
+require_permission/require_system_role dependency factories) was removed
+along with the rest of the local RBAC implementation -- see
+docs/HANDOFF.md. get_current_user below is currently the only
+authorization primitive endpoints can depend on: it proves the caller
+holds a valid access token for an active user of an active tenant, and
+nothing more. It grants no permissions and must never be treated as if it
+did.
+
+Seam for future CRM integration: once the CRM authorization contract
+(token issuance, claim shape, or permission-lookup API) is known, add a
+CRM-backed dependency here (e.g. a get_authorization_context that calls a
+CrmAuthorizationProvider) and have endpoints depend on it instead of -- or
+in addition to -- get_current_user. No such dependency is invented here in
+its absence. Frontend-supplied role/permission values must never be
+trusted directly by any endpoint.
+"""
 
 from collections.abc import Iterator
 from uuid import UUID
@@ -8,8 +27,6 @@ from fastapi.security import OAuth2PasswordBearer
 from jwt import PyJWTError
 from sqlalchemy.orm import Session
 
-from app.core.authorization.catalog import PLATFORM_TENANT_SLUG
-from app.core.authorization.context import AuthorizationContext
 from app.core.exceptions import (
     InvalidAccessTokenError,
     TenantInactiveError,
@@ -20,17 +37,12 @@ from app.core.exceptions import (
 from app.core.security.jwt import decode_access_token
 from app.database.session import SessionFactory
 from app.models.user import User
-from app.repositories.authorization_repository import AuthorizationRepository
+from app.repositories.campaign_repository import CampaignRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
-from app.repositories.role_repository import RoleRepository
 from app.repositories.tenant_repository import TenantRepository
 from app.repositories.user_repository import UserRepository
-from app.repositories.user_role_assignment_repository import (
-    UserRoleAssignmentRepository,
-)
 from app.services.auth_service import AuthService
-from app.services.authorization_service import AuthorizationService
-from app.services.role_management_service import RoleManagementService
+from app.services.campaign_service import CampaignService
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
 
@@ -79,51 +91,17 @@ def get_auth_service(
     )
 
 
-def get_authorization_repository(
+def get_campaign_repository(db: Session = Depends(get_db)) -> CampaignRepository:
+    """Provide a CampaignRepository bound to the request session."""
+    return CampaignRepository(db)
+
+
+def get_campaign_service(
     db: Session = Depends(get_db),
-) -> AuthorizationRepository:
-    """Provide an AuthorizationRepository bound to the request session."""
-    return AuthorizationRepository(db)
-
-
-def get_authorization_service(
-    authorization_repository: AuthorizationRepository = Depends(
-        get_authorization_repository
-    ),
-) -> AuthorizationService:
-    """Provide a freshly constructed AuthorizationService for the current request."""
-    return AuthorizationService(authorization_repository)
-
-
-def get_role_repository(db: Session = Depends(get_db)) -> RoleRepository:
-    """Provide a RoleRepository bound to the request session."""
-    return RoleRepository(db)
-
-
-def get_user_role_assignment_repository(
-    db: Session = Depends(get_db),
-) -> UserRoleAssignmentRepository:
-    """Provide a UserRoleAssignmentRepository bound to the request session."""
-    return UserRoleAssignmentRepository(db)
-
-
-def get_role_management_service(
-    db: Session = Depends(get_db),
-    role_repository: RoleRepository = Depends(get_role_repository),
-    user_role_assignment_repository: UserRoleAssignmentRepository = Depends(
-        get_user_role_assignment_repository
-    ),
-    user_repository: UserRepository = Depends(get_user_repository),
-    tenant_repository: TenantRepository = Depends(get_tenant_repository),
-) -> RoleManagementService:
-    """Provide a freshly constructed RoleManagementService for the current request."""
-    return RoleManagementService(
-        role_repository=role_repository,
-        user_role_assignment_repository=user_role_assignment_repository,
-        user_repository=user_repository,
-        tenant_repository=tenant_repository,
-        session=db,
-    )
+    campaign_repository: CampaignRepository = Depends(get_campaign_repository),
+) -> CampaignService:
+    """Provide a freshly constructed CampaignService for the current request."""
+    return CampaignService(campaign_repository=campaign_repository, session=db)
 
 
 def _unauthorized(detail: str) -> HTTPException:
@@ -145,7 +123,12 @@ def get_current_user(
     tenant_repository: TenantRepository = Depends(get_tenant_repository),
     user_repository: UserRepository = Depends(get_user_repository),
 ) -> User:
-    """Resolve the authenticated, active user from a validated JWT access token."""
+    """Resolve the authenticated, active user from a validated JWT access token.
+
+    This proves authentication only. It carries no role or permission
+    information -- see the module docstring for the current CRM-migration
+    state of authorization in this backend.
+    """
     try:
         try:
             claims = decode_access_token(token)
@@ -187,19 +170,3 @@ def get_current_user(
         UserInactiveError,
     ) as exc:
         raise _unauthorized(str(exc)) from exc
-
-
-def get_authorization_context(
-    current_user: User = Depends(get_current_user),
-    authorization_service: AuthorizationService = Depends(get_authorization_service),
-) -> AuthorizationContext:
-    """Build the caller's frozen authorization snapshot.
-
-    FastAPI's per-request dependency cache guarantees this runs at most once
-    per request, no matter how many permission checks the endpoint declares.
-    """
-    return authorization_service.build_context(
-        user_id=current_user.id,
-        tenant_id=current_user.tenant_id,
-        is_platform_tenant=current_user.tenant.slug == PLATFORM_TENANT_SLUG,
-    )

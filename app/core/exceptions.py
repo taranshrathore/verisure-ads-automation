@@ -85,69 +85,44 @@ class UserInactiveError(AppError):
         super().__init__(message)
 
 
-class AuthorizationError(AppError):
-    """Base class for authorization-related failures."""
+class CampaignNotFoundError(AppError):
+    """Raised when a campaign cannot be found within the caller's tenant.
 
-    def __init__(self, message: str = "Authorization failed.") -> None:
+    Also used for cross-tenant lookups (a campaign that exists but belongs
+    to a different tenant) -- deliberately indistinguishable from a
+    genuinely missing campaign, to avoid leaking cross-tenant existence.
+    """
+
+    def __init__(self, message: str = "Campaign not found.") -> None:
         super().__init__(message)
 
 
-class PermissionDeniedError(AuthorizationError):
-    """Raised when a caller lacks a required permission."""
-
-    def __init__(self, message: str = "Permission denied.") -> None:
-        super().__init__(message)
-
-
-class CrossTenantAccessError(AuthorizationError):
-    """Raised when a caller attempts to access another tenant's resource."""
-
-    def __init__(self, message: str = "Resource not found.") -> None:
-        super().__init__(message)
-
-
-class RoleNotFoundError(AppError):
-    """Raised when a role cannot be found."""
-
-    def __init__(self, message: str = "Role not found.") -> None:
-        super().__init__(message)
-
-
-class PermissionNotFoundError(AppError):
-    """Raised when a permission cannot be found."""
-
-    def __init__(self, message: str = "Permission not found.") -> None:
-        super().__init__(message)
-
-
-class RoleAssignmentConflictError(AppError):
-    """Raised when a role assignment conflicts with an existing one."""
-
-    def __init__(self, message: str = "Role assignment already exists.") -> None:
-        super().__init__(message)
-
-
-class ProtectedRoleError(AppError):
-    """Raised when a protected built-in role is modified."""
-
-    def __init__(self, message: str = "Protected role cannot be modified.") -> None:
-        super().__init__(message)
-
-
-class LastTenantAdminError(AppError):
-    """Raised when an operation would remove a tenant's final administrator."""
+class InvalidCampaignStateError(AppError):
+    """Raised when an operation is attempted against a campaign whose
+    current lifecycle state does not allow it (e.g. editing or archiving
+    a campaign that is no longer a draft).
+    """
 
     def __init__(
-        self, message: str = "A tenant must retain at least one active administrator."
+        self, message: str = "Campaign is not in a valid state for this operation."
     ) -> None:
         super().__init__(message)
 
 
-class PlatformTenantRequiredError(AppError):
-    """Raised when a system-role grant targets a user outside the platform tenant."""
+class CampaignValidationError(AppError):
+    """Raised when campaign field values fail domain validation (e.g. an
+    incomplete budget triple, a non-positive amount, a malformed currency
+    code, or an invalid schedule) before any database write is attempted.
+    """
 
-    def __init__(
-        self,
-        message: str = "System roles may only be granted to platform-tenant users.",
-    ) -> None:
+    def __init__(self, message: str = "Invalid campaign data.") -> None:
         super().__init__(message)
+
+
+# NOTE: The local RBAC exception hierarchy (AuthorizationError,
+# PermissionDeniedError, CrossTenantAccessError, RoleNotFoundError,
+# PermissionNotFoundError, RoleAssignmentConflictError, ProtectedRoleError,
+# LastTenantAdminError, PlatformTenantRequiredError) was removed along with
+# the local RBAC engine -- see docs/HANDOFF.md for the CRM migration
+# status. Reintroduce authorization-failure exceptions once the CRM
+# authorization contract is known; do not guess at their shape now.

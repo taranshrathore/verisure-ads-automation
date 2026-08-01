@@ -16,16 +16,21 @@ if TYPE_CHECKING:
 class User(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     """A user account belonging to exactly one tenant.
 
-    TODO: Replace the flat `role` column with a dedicated roles/permissions
-    model once RBAC requirements are defined.
+    TODO: `role` (flat string) predates RBAC and is not used for
+    authorization decisions. VeriSure CRM is intended to become the
+    source of truth for roles/permissions (see docs/HANDOFF.md); whether
+    this column is still needed is a decision for that integration work,
+    not a local RBAC model.
     TODO: Add OAuth provider linkage once OAuth is in scope.
     """
 
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("tenant_id", "email", name="uq_users_tenant_id_email"),
-        # Required as the referenced side of the composite FK from
-        # user_role_assignments(user_id, tenant_id) -> users(id, tenant_id).
+        # Referenced side of Campaign's composite FK
+        # (created_by_user_id, tenant_id) -> users(id, tenant_id): guarantees
+        # at the database level that a campaign's creator genuinely belongs
+        # to that campaign's own tenant.
         UniqueConstraint("id", "tenant_id", name="uq_users_id_tenant_id"),
     )
 
