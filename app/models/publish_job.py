@@ -1,11 +1,12 @@
 """PublishJob model: durable async publish work item for one campaign.
 
-ASYNC PUBLISH PHASE 1 SCOPE: model + migration only. No repository,
-service, worker, or API exists yet -- rows are not created or mutated by
-any code path in this codebase today. The shape exists so later phases
-(enqueue, SKIP LOCKED claim, worker execution) have a stable place to
-record publish-job lifecycle without altering Campaign or
-CampaignDeployment.
+Model + migration landed in Async Publish Phase 1. Phase 2 adds
+PublishJobRepository (create/get/claim_next/mark_finished) for persistence
+access -- see app/repositories/publish_job_repository.py. No service,
+worker, or API exists yet; rows are not created or mutated by any
+application code path outside tests today. Later phases (enqueue, worker
+execution) build on this model and repository without altering Campaign
+or CampaignDeployment.
 """
 
 import uuid
