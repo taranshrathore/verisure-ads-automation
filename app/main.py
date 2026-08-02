@@ -3,7 +3,7 @@
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import auth, campaigns
+from app.api.v1 import auth, campaigns, provider_connections
 from app.core.exception_handlers import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.settings import settings
@@ -31,6 +31,7 @@ app.add_middleware(
 api_v1_router = APIRouter(prefix="/api/v1")
 api_v1_router.include_router(auth.router)
 api_v1_router.include_router(campaigns.router)
+api_v1_router.include_router(provider_connections.router)
 
 app.include_router(api_v1_router)
 

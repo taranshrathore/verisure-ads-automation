@@ -14,12 +14,9 @@ from app.core.exceptions import (
     CampaignDeploymentNotFoundError,
     InvalidCampaignDeploymentStateError,
 )
+from app.core.providers import Provider
 from app.models.campaign import Campaign
-from app.models.campaign_deployment import (
-    CampaignDeployment,
-    CampaignDeploymentProvider,
-    CampaignDeploymentStatus,
-)
+from app.models.campaign_deployment import CampaignDeployment, CampaignDeploymentStatus
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.repositories.campaign_deployment_repository import (
@@ -79,7 +76,7 @@ def test_create_pending_deployment_sets_initial_state(
     deployment = deployment_service.create_pending_deployment(
         tenant_id=tenant.id,
         campaign_id=campaign.id,
-        provider=CampaignDeploymentProvider.META,
+        provider=Provider.META,
     )
 
     assert deployment.status == CampaignDeploymentStatus.PENDING
@@ -97,7 +94,7 @@ def test_full_happy_path_pending_to_submitted_to_live_to_paused_to_live(
     deployment = deployment_service.create_pending_deployment(
         tenant_id=tenant.id,
         campaign_id=campaign.id,
-        provider=CampaignDeploymentProvider.META,
+        provider=Provider.META,
     )
 
     submitted = deployment_service.mark_submitted(
@@ -132,7 +129,7 @@ def test_mark_failed_from_submitted(
     deployment = deployment_service.create_pending_deployment(
         tenant_id=tenant.id,
         campaign_id=campaign.id,
-        provider=CampaignDeploymentProvider.GOOGLE,
+        provider=Provider.GOOGLE,
     )
     deployment_service.mark_submitted(
         tenant_id=tenant.id, deployment_id=deployment.id, external_campaign_id="ext-1"
@@ -160,7 +157,7 @@ def test_mark_failed_from_pending(
     deployment = deployment_service.create_pending_deployment(
         tenant_id=tenant.id,
         campaign_id=campaign.id,
-        provider=CampaignDeploymentProvider.META,
+        provider=Provider.META,
     )
 
     failed = deployment_service.mark_failed(
@@ -185,7 +182,7 @@ def test_mark_live_from_pending_raises_invalid_state(
     deployment = deployment_service.create_pending_deployment(
         tenant_id=tenant.id,
         campaign_id=campaign.id,
-        provider=CampaignDeploymentProvider.META,
+        provider=Provider.META,
     )
 
     with pytest.raises(InvalidCampaignDeploymentStateError):
@@ -203,7 +200,7 @@ def test_mark_submitted_twice_raises_invalid_state(
     deployment = deployment_service.create_pending_deployment(
         tenant_id=tenant.id,
         campaign_id=campaign.id,
-        provider=CampaignDeploymentProvider.META,
+        provider=Provider.META,
     )
     deployment_service.mark_submitted(
         tenant_id=tenant.id, deployment_id=deployment.id, external_campaign_id="ext-1"
@@ -226,7 +223,7 @@ def test_mark_paused_from_failed_raises_invalid_state(
     deployment = deployment_service.create_pending_deployment(
         tenant_id=tenant.id,
         campaign_id=campaign.id,
-        provider=CampaignDeploymentProvider.META,
+        provider=Provider.META,
     )
     deployment_service.mark_submitted(
         tenant_id=tenant.id, deployment_id=deployment.id, external_campaign_id="ext-1"
@@ -248,7 +245,7 @@ def test_cross_tenant_mark_submitted_raises_not_found(
     deployment = deployment_service.create_pending_deployment(
         tenant_id=tenant_a.id,
         campaign_id=campaign.id,
-        provider=CampaignDeploymentProvider.META,
+        provider=Provider.META,
     )
 
     with pytest.raises(CampaignDeploymentNotFoundError):
@@ -283,7 +280,7 @@ def test_stale_transition_is_rejected_by_conditional_update(
     deployment = deployment_service.create_pending_deployment(
         tenant_id=tenant.id,
         campaign_id=campaign.id,
-        provider=CampaignDeploymentProvider.META,
+        provider=Provider.META,
     )
     deployment_service.mark_submitted(
         tenant_id=tenant.id, deployment_id=deployment.id, external_campaign_id="ext-1"
@@ -295,7 +292,7 @@ def test_stale_transition_is_rejected_by_conditional_update(
         id=deployment.id,
         tenant_id=tenant.id,
         campaign_id=campaign.id,
-        provider=CampaignDeploymentProvider.META,
+        provider=Provider.META,
         idempotency_key=str(uuid.uuid4()),
         status=CampaignDeploymentStatus.PENDING,
     )
@@ -345,7 +342,7 @@ def test_session_remains_usable_after_repository_failure_during_mark_submitted(
     deployment = deployment_service.create_pending_deployment(
         tenant_id=tenant.id,
         campaign_id=campaign.id,
-        provider=CampaignDeploymentProvider.META,
+        provider=Provider.META,
     )
 
     original_update_external_reference = deployment_repository.update_external_reference
@@ -406,7 +403,7 @@ def test_session_remains_usable_after_repository_failure_during_create(
             deployment_service.create_pending_deployment(
                 tenant_id=tenant.id,
                 campaign_id=campaign.id,
-                provider=CampaignDeploymentProvider.META,
+                provider=Provider.META,
             )
     finally:
         deployment_repository.create = original_create
@@ -415,6 +412,6 @@ def test_session_remains_usable_after_repository_failure_during_create(
     deployment = deployment_service.create_pending_deployment(
         tenant_id=tenant.id,
         campaign_id=campaign.id,
-        provider=CampaignDeploymentProvider.GOOGLE,
+        provider=Provider.GOOGLE,
     )
     assert deployment.status == CampaignDeploymentStatus.PENDING

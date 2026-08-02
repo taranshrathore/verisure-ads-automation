@@ -8,8 +8,13 @@ from app.core.exceptions import (
     CampaignDeploymentNotFoundError,
     CampaignNotFoundError,
     CampaignValidationError,
+    CredentialDecryptionError,
+    CredentialEncryptionUnavailableError,
     InvalidCampaignDeploymentStateError,
     InvalidCampaignStateError,
+    InvalidProviderConnectionStateError,
+    ProviderConnectionAlreadyExistsError,
+    ProviderConnectionNotFoundError,
     TenantInactiveError,
     TenantNotFoundError,
     UserInactiveError,
@@ -113,3 +118,46 @@ def register_exception_handlers(app: FastAPI) -> None:
     ) -> JSONResponse:
         """Convert an InvalidCampaignDeploymentStateError into a 409 response."""
         return _json_error(status.HTTP_409_CONFLICT, str(exc))
+
+    @app.exception_handler(ProviderConnectionNotFoundError)
+    async def _handle_provider_connection_not_found(
+        request: Request, exc: ProviderConnectionNotFoundError
+    ) -> JSONResponse:
+        """Convert a ProviderConnectionNotFoundError into a 404 response."""
+        return _json_error(status.HTTP_404_NOT_FOUND, str(exc))
+
+    @app.exception_handler(ProviderConnectionAlreadyExistsError)
+    async def _handle_provider_connection_already_exists(
+        request: Request, exc: ProviderConnectionAlreadyExistsError
+    ) -> JSONResponse:
+        """Convert a ProviderConnectionAlreadyExistsError into a 409 response."""
+        return _json_error(status.HTTP_409_CONFLICT, str(exc))
+
+    @app.exception_handler(InvalidProviderConnectionStateError)
+    async def _handle_invalid_provider_connection_state(
+        request: Request, exc: InvalidProviderConnectionStateError
+    ) -> JSONResponse:
+        """Convert an InvalidProviderConnectionStateError into a 409 response."""
+        return _json_error(status.HTTP_409_CONFLICT, str(exc))
+
+    @app.exception_handler(CredentialEncryptionUnavailableError)
+    async def _handle_credential_encryption_unavailable(
+        request: Request, exc: CredentialEncryptionUnavailableError
+    ) -> JSONResponse:
+        """Convert a CredentialEncryptionUnavailableError into a 500 response.
+
+        This is a server-side configuration problem (missing/malformed
+        ENCRYPTION_KEY), never a client input error.
+        """
+        return _json_error(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc))
+
+    @app.exception_handler(CredentialDecryptionError)
+    async def _handle_credential_decryption_error(
+        request: Request, exc: CredentialDecryptionError
+    ) -> JSONResponse:
+        """Convert a CredentialDecryptionError into a 500 response.
+
+        The exception message is already generic (see
+        app/core/exceptions.py) and never contains cryptographic material.
+        """
+        return _json_error(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc))

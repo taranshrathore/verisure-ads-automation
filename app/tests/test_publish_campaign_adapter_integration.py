@@ -21,12 +21,9 @@ from sqlalchemy.orm import Session
 from app.adapters.base_adapter import BaseAdapter
 from app.adapters.models import PublishResult
 from app.core.campaign_spec import CampaignSpec
+from app.core.providers import Provider
 from app.models.campaign import Campaign, CampaignBudgetType, CampaignObjective
-from app.models.campaign_deployment import (
-    CampaignDeployment,
-    CampaignDeploymentProvider,
-    CampaignDeploymentStatus,
-)
+from app.models.campaign_deployment import CampaignDeployment, CampaignDeploymentStatus
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.repositories.campaign_deployment_repository import (
@@ -111,10 +108,10 @@ class FakeAdapterRegistry:
     reaching into, the real ProviderAdapterRegistry.
     """
 
-    def __init__(self, adapters: dict[CampaignDeploymentProvider, BaseAdapter]) -> None:
+    def __init__(self, adapters: dict[Provider, BaseAdapter]) -> None:
         self._adapters = adapters
 
-    def get(self, provider: CampaignDeploymentProvider) -> BaseAdapter:
+    def get(self, provider: Provider) -> BaseAdapter:
         try:
             return self._adapters[provider]
         except KeyError:
@@ -200,7 +197,7 @@ def _make_complete_campaign(
 
 
 def _by_provider(
-    deployments: list, provider: CampaignDeploymentProvider
+    deployments: list, provider: Provider
 ):
     return next(d for d in deployments if d.provider == provider)
 
@@ -217,8 +214,8 @@ def test_both_providers_succeed(
     campaign = _make_complete_campaign(db_session, tenant, user)
     registry = FakeAdapterRegistry(
         {
-            CampaignDeploymentProvider.META: FakeSuccessAdapter("meta-ext-1"),
-            CampaignDeploymentProvider.GOOGLE: FakeSuccessAdapter("google-ext-1"),
+            Provider.META: FakeSuccessAdapter("meta-ext-1"),
+            Provider.GOOGLE: FakeSuccessAdapter("google-ext-1"),
         }
     )
     service = _make_publish_service(
@@ -231,8 +228,8 @@ def test_both_providers_succeed(
     for deployment in deployments:
         assert deployment.status == CampaignDeploymentStatus.SUBMITTED
 
-    meta = _by_provider(deployments, CampaignDeploymentProvider.META)
-    google = _by_provider(deployments, CampaignDeploymentProvider.GOOGLE)
+    meta = _by_provider(deployments, Provider.META)
+    google = _by_provider(deployments, Provider.GOOGLE)
     assert meta.external_campaign_id == "meta-ext-1"
     assert google.external_campaign_id == "google-ext-1"
 
@@ -249,10 +246,10 @@ def test_one_provider_succeeds_and_one_fails(
     campaign = _make_complete_campaign(db_session, tenant, user)
     registry = FakeAdapterRegistry(
         {
-            CampaignDeploymentProvider.META: FakeFailureAdapter(
+            Provider.META: FakeFailureAdapter(
                 "meta rejected the budget"
             ),
-            CampaignDeploymentProvider.GOOGLE: FakeSuccessAdapter("google-ext-2"),
+            Provider.GOOGLE: FakeSuccessAdapter("google-ext-2"),
         }
     )
     service = _make_publish_service(
@@ -261,8 +258,8 @@ def test_one_provider_succeeds_and_one_fails(
 
     deployments = service.publish_campaign(tenant_id=tenant.id, campaign_id=campaign.id)
 
-    meta = _by_provider(deployments, CampaignDeploymentProvider.META)
-    google = _by_provider(deployments, CampaignDeploymentProvider.GOOGLE)
+    meta = _by_provider(deployments, Provider.META)
+    google = _by_provider(deployments, Provider.GOOGLE)
     assert meta.status == CampaignDeploymentStatus.FAILED
     assert meta.last_error_message == "meta rejected the budget"
     assert meta.external_campaign_id is None
@@ -282,8 +279,8 @@ def test_adapter_exception_is_caught_and_marks_deployment_failed(
     campaign = _make_complete_campaign(db_session, tenant, user)
     registry = FakeAdapterRegistry(
         {
-            CampaignDeploymentProvider.META: FakeExceptionAdapter(),
-            CampaignDeploymentProvider.GOOGLE: FakeSuccessAdapter("google-ext-3"),
+            Provider.META: FakeExceptionAdapter(),
+            Provider.GOOGLE: FakeSuccessAdapter("google-ext-3"),
         }
     )
     service = _make_publish_service(
@@ -293,7 +290,7 @@ def test_adapter_exception_is_caught_and_marks_deployment_failed(
     # No exception escapes publish_campaign even though META's adapter raises.
     deployments = service.publish_campaign(tenant_id=tenant.id, campaign_id=campaign.id)
 
-    meta = _by_provider(deployments, CampaignDeploymentProvider.META)
+    meta = _by_provider(deployments, Provider.META)
     assert meta.status == CampaignDeploymentStatus.FAILED
     assert meta.last_error_message == "simulated adapter crash"
 
@@ -311,8 +308,8 @@ def test_google_is_still_attempted_when_meta_adapter_raises(
     campaign = _make_complete_campaign(db_session, tenant, user)
     registry = FakeAdapterRegistry(
         {
-            CampaignDeploymentProvider.META: FakeExceptionAdapter(),
-            CampaignDeploymentProvider.GOOGLE: FakeSuccessAdapter("google-ext-4"),
+            Provider.META: FakeExceptionAdapter(),
+            Provider.GOOGLE: FakeSuccessAdapter("google-ext-4"),
         }
     )
     service = _make_publish_service(
@@ -323,10 +320,10 @@ def test_google_is_still_attempted_when_meta_adapter_raises(
 
     providers_seen = {d.provider for d in deployments}
     assert providers_seen == {
-        CampaignDeploymentProvider.META,
-        CampaignDeploymentProvider.GOOGLE,
+        Provider.META,
+        Provider.GOOGLE,
     }
-    google = _by_provider(deployments, CampaignDeploymentProvider.GOOGLE)
+    google = _by_provider(deployments, Provider.GOOGLE)
     assert google.status == CampaignDeploymentStatus.SUBMITTED
     assert google.external_campaign_id == "google-ext-4"
 
@@ -343,8 +340,8 @@ def test_google_is_still_attempted_when_meta_adapter_reports_failure(
     campaign = _make_complete_campaign(db_session, tenant, user)
     registry = FakeAdapterRegistry(
         {
-            CampaignDeploymentProvider.META: FakeFailureAdapter("meta declined"),
-            CampaignDeploymentProvider.GOOGLE: FakeSuccessAdapter("google-ext-5"),
+            Provider.META: FakeFailureAdapter("meta declined"),
+            Provider.GOOGLE: FakeSuccessAdapter("google-ext-5"),
         }
     )
     service = _make_publish_service(
@@ -353,8 +350,8 @@ def test_google_is_still_attempted_when_meta_adapter_reports_failure(
 
     deployments = service.publish_campaign(tenant_id=tenant.id, campaign_id=campaign.id)
 
-    meta = _by_provider(deployments, CampaignDeploymentProvider.META)
-    google = _by_provider(deployments, CampaignDeploymentProvider.GOOGLE)
+    meta = _by_provider(deployments, Provider.META)
+    google = _by_provider(deployments, Provider.GOOGLE)
     assert meta.status == CampaignDeploymentStatus.FAILED
     assert google.status == CampaignDeploymentStatus.SUBMITTED
     assert google.external_campaign_id == "google-ext-5"
@@ -375,8 +372,8 @@ def test_blank_exception_message_gets_a_safe_fallback(
     campaign = _make_complete_campaign(db_session, tenant, user)
     registry = FakeAdapterRegistry(
         {
-            CampaignDeploymentProvider.META: FakeExceptionAdapter(RuntimeError("")),
-            CampaignDeploymentProvider.GOOGLE: FakeSuccessAdapter("google-ext-6"),
+            Provider.META: FakeExceptionAdapter(RuntimeError("")),
+            Provider.GOOGLE: FakeSuccessAdapter("google-ext-6"),
         }
     )
     service = _make_publish_service(
@@ -385,7 +382,7 @@ def test_blank_exception_message_gets_a_safe_fallback(
 
     deployments = service.publish_campaign(tenant_id=tenant.id, campaign_id=campaign.id)
 
-    meta = _by_provider(deployments, CampaignDeploymentProvider.META)
+    meta = _by_provider(deployments, Provider.META)
     assert meta.status == CampaignDeploymentStatus.FAILED
     assert meta.last_error_message is not None
     assert meta.last_error_message.strip() != ""
@@ -406,8 +403,8 @@ def test_overly_long_error_message_is_truncated_to_column_width(
     huge_message = "x" * 5000
     registry = FakeAdapterRegistry(
         {
-            CampaignDeploymentProvider.META: FakeFailureAdapter(huge_message),
-            CampaignDeploymentProvider.GOOGLE: FakeSuccessAdapter("google-ext-7"),
+            Provider.META: FakeFailureAdapter(huge_message),
+            Provider.GOOGLE: FakeSuccessAdapter("google-ext-7"),
         }
     )
     service = _make_publish_service(
@@ -416,7 +413,7 @@ def test_overly_long_error_message_is_truncated_to_column_width(
 
     deployments = service.publish_campaign(tenant_id=tenant.id, campaign_id=campaign.id)
 
-    meta = _by_provider(deployments, CampaignDeploymentProvider.META)
+    meta = _by_provider(deployments, Provider.META)
     assert meta.status == CampaignDeploymentStatus.FAILED
     assert meta.last_error_message is not None
     assert len(meta.last_error_message) <= 2000
@@ -459,8 +456,8 @@ def test_persistence_failure_while_recording_a_failure_propagates(
     campaign = _make_complete_campaign(db_session, tenant, user)
     registry = FakeAdapterRegistry(
         {
-            CampaignDeploymentProvider.META: FakeFailureAdapter("meta declined"),
-            CampaignDeploymentProvider.GOOGLE: FakeSuccessAdapter("google-ext-8"),
+            Provider.META: FakeFailureAdapter("meta declined"),
+            Provider.GOOGLE: FakeSuccessAdapter("google-ext-8"),
         }
     )
     failing_deployment_service = _MarkFailedAlwaysRaisesDeploymentService(
@@ -496,8 +493,8 @@ def test_next_provider_is_not_attempted_when_failure_persistence_fails(
     campaign = _make_complete_campaign(db_session, tenant, user)
     registry = FakeAdapterRegistry(
         {
-            CampaignDeploymentProvider.META: FakeFailureAdapter("meta declined"),
-            CampaignDeploymentProvider.GOOGLE: FakeSuccessAdapter("google-ext-9"),
+            Provider.META: FakeFailureAdapter("meta declined"),
+            Provider.GOOGLE: FakeSuccessAdapter("google-ext-9"),
         }
     )
     failing_deployment_service = _MarkFailedAlwaysRaisesDeploymentService(
@@ -516,7 +513,7 @@ def test_next_provider_is_not_attempted_when_failure_persistence_fails(
         service.publish_campaign(tenant_id=tenant.id, campaign_id=campaign.id)
 
     google_deployment = deployment_repository.get_by_campaign_and_provider(
-        tenant.id, campaign.id, CampaignDeploymentProvider.GOOGLE
+        tenant.id, campaign.id, Provider.GOOGLE
     )
     assert google_deployment is None
 
@@ -549,7 +546,7 @@ def test_non_pending_deployment_is_not_republished(
     pending = deployment_service.create_pending_deployment(
         tenant_id=tenant.id,
         campaign_id=campaign.id,
-        provider=CampaignDeploymentProvider.META,
+        provider=Provider.META,
     )
     submitted = deployment_service.mark_submitted(
         tenant_id=tenant.id,
@@ -574,8 +571,8 @@ def test_non_pending_deployment_is_not_republished(
 
     registry = FakeAdapterRegistry(
         {
-            CampaignDeploymentProvider.META: _AdapterThatMustNeverBeCalled(),
-            CampaignDeploymentProvider.GOOGLE: FakeSuccessAdapter("google-ext-10"),
+            Provider.META: _AdapterThatMustNeverBeCalled(),
+            Provider.GOOGLE: FakeSuccessAdapter("google-ext-10"),
         }
     )
     service = _make_publish_service(
@@ -584,7 +581,7 @@ def test_non_pending_deployment_is_not_republished(
 
     deployments = service.publish_campaign(tenant_id=tenant.id, campaign_id=campaign.id)
 
-    meta = _by_provider(deployments, CampaignDeploymentProvider.META)
+    meta = _by_provider(deployments, Provider.META)
     assert meta.id == pending.id
     assert meta.status == target_status
     assert meta.external_campaign_id == "pre-existing-ext-id"

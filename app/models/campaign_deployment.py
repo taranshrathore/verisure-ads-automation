@@ -24,15 +24,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.providers import Provider
 from app.database.base import Base
 from app.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
-
-
-class CampaignDeploymentProvider(StrEnum):
-    """Ad platform a campaign is deployed to."""
-
-    META = "meta"
-    GOOGLE = "google"
 
 
 class CampaignDeploymentStatus(StrEnum):
@@ -96,9 +90,9 @@ class CampaignDeployment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
     )
     campaign_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
-    provider: Mapped[CampaignDeploymentProvider] = mapped_column(
+    provider: Mapped[Provider] = mapped_column(
         Enum(
-            CampaignDeploymentProvider,
+            Provider,
             name="campaign_deployment_provider",
             values_callable=_enum_values,
         ),

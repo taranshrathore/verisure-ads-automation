@@ -37,12 +37,9 @@ from app.api.dependencies import (
     get_current_user,
     get_publish_campaign_service,
 )
+from app.core.providers import Provider
 from app.models.campaign import Campaign, CampaignBudgetType, CampaignObjective, CampaignStatus
-from app.models.campaign_deployment import (
-    CampaignDeployment,
-    CampaignDeploymentProvider,
-    CampaignDeploymentStatus,
-)
+from app.models.campaign_deployment import CampaignDeployment, CampaignDeploymentStatus
 from app.models.user import User
 from app.services.campaign_service import CampaignService
 from app.services.publish_campaign_service import PublishCampaignService
@@ -147,7 +144,7 @@ class CampaignDeploymentRead(BaseModel):
 
     id: UUID
     campaign_id: UUID
-    provider: CampaignDeploymentProvider
+    provider: Provider
     status: CampaignDeploymentStatus
     external_campaign_id: str | None
     submitted_at: datetime | None

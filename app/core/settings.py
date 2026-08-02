@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = 15
     jwt_issuer: str = "verisure-api"
     jwt_audience: str = "verisure-clients"
+    # Comma-separated Fernet keys for CredentialEncryptionService (see
+    # app/core/security/credential_encryption.py). The first key encrypts;
+    # every listed key can decrypt, so rotation is: prepend a new key, keep
+    # old keys until nothing on disk still needs them, then drop the old
+    # ones. None/blank means encryption is unavailable -- callers that need
+    # it fail closed rather than falling back to plaintext.
+    encryption_key: str | None = None
 
 
 @lru_cache

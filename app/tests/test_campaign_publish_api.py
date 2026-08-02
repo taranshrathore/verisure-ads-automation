@@ -27,8 +27,8 @@ from app.adapters.base_adapter import BaseAdapter
 from app.adapters.models import PublishResult
 from app.api.dependencies import get_provider_adapter_registry
 from app.core.campaign_spec import CampaignSpec
+from app.core.providers import Provider
 from app.main import app
-from app.models.campaign_deployment import CampaignDeploymentProvider
 from app.repositories.campaign_deployment_repository import (
     CampaignDeploymentRepository,
 )
@@ -226,7 +226,7 @@ def test_existing_non_pending_deployment_is_reused_unchanged(
     pending = deployment_service.create_pending_deployment(
         tenant_id=user.tenant_id,
         campaign_id=UUID(created["id"]),
-        provider=CampaignDeploymentProvider.META,
+        provider=Provider.META,
     )
     submitted = deployment_service.mark_submitted(
         tenant_id=user.tenant_id,
@@ -351,10 +351,10 @@ class _FakeAdapterRegistry:
     ProviderAdapterRegistry class is never modified or subclassed.
     """
 
-    def __init__(self, adapters: dict[CampaignDeploymentProvider, BaseAdapter]) -> None:
+    def __init__(self, adapters: dict[Provider, BaseAdapter]) -> None:
         self._adapters = adapters
 
-    def get(self, provider: CampaignDeploymentProvider) -> BaseAdapter:
+    def get(self, provider: Provider) -> BaseAdapter:
         return self._adapters[provider]
 
 
@@ -362,8 +362,8 @@ class _FakeAdapterRegistry:
 def fake_success_registry() -> _FakeAdapterRegistry:
     return _FakeAdapterRegistry(
         {
-            CampaignDeploymentProvider.META: _FakeSuccessAdapter("meta-ext-http-1"),
-            CampaignDeploymentProvider.GOOGLE: _FakeSuccessAdapter("google-ext-http-1"),
+            Provider.META: _FakeSuccessAdapter("meta-ext-http-1"),
+            Provider.GOOGLE: _FakeSuccessAdapter("google-ext-http-1"),
         }
     )
 

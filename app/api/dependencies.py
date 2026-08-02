@@ -35,13 +35,18 @@ from app.core.exceptions import (
     UserInactiveError,
     UserNotFoundError,
 )
+from app.core.security.credential_encryption import CredentialEncryptionService
 from app.core.security.jwt import decode_access_token
+from app.core.settings import settings
 from app.database.session import SessionFactory
 from app.models.user import User
 from app.repositories.campaign_deployment_repository import (
     CampaignDeploymentRepository,
 )
 from app.repositories.campaign_repository import CampaignRepository
+from app.repositories.provider_connection_repository import (
+    ProviderConnectionRepository,
+)
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.tenant_repository import TenantRepository
 from app.repositories.user_repository import UserRepository
@@ -49,6 +54,7 @@ from app.services.auth_service import AuthService
 from app.services.campaign_deployment_service import CampaignDeploymentService
 from app.services.campaign_service import CampaignService
 from app.services.campaign_spec_builder import CampaignSpecBuilder
+from app.services.provider_connection_service import ProviderConnectionService
 from app.services.publish_campaign_service import PublishCampaignService
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
@@ -176,6 +182,45 @@ def get_publish_campaign_service(
         spec_builder,
         adapter_registry,
         db,
+    )
+
+
+def get_provider_connection_repository(
+    db: Session = Depends(get_db),
+) -> ProviderConnectionRepository:
+    """Provide a ProviderConnectionRepository bound to the request session."""
+    return ProviderConnectionRepository(db)
+
+
+def get_credential_encryption_service() -> CredentialEncryptionService:
+    """Provide a CredentialEncryptionService constructed from ENCRYPTION_KEY.
+
+    Constructed fresh per request from settings.encryption_key -- never
+    caches decrypted credentials (or anything else). Raises
+    CredentialEncryptionUnavailableError (mapped to HTTP 500) when the
+    key is missing/blank/malformed; encryption fails closed rather than
+    falling back to plaintext.
+    """
+    return CredentialEncryptionService(settings.encryption_key)
+
+
+def get_provider_connection_service(
+    db: Session = Depends(get_db),
+    connection_repository: ProviderConnectionRepository = Depends(
+        get_provider_connection_repository
+    ),
+    encryption_service: CredentialEncryptionService = Depends(
+        get_credential_encryption_service
+    ),
+) -> ProviderConnectionService:
+    """Provide a freshly constructed ProviderConnectionService for the current request.
+
+    The repository and the service share the same request-scoped session
+    via FastAPI's per-request dependency caching -- no duplicate
+    construction paths.
+    """
+    return ProviderConnectionService(
+        connection_repository, encryption_service, db
     )
 
 

@@ -10,8 +10,8 @@ CampaignObjective and CampaignBudgetType are reused from
 app.models.campaign rather than duplicated here: they are already
 plain, provider-neutral StrEnums with no SQLAlchemy coupling of their
 own, and a second parallel enum would just be a drift risk with no
-benefit. CampaignDeploymentProvider is reused from
-app.models.campaign_deployment for the same reason.
+benefit. Provider is reused from app.core.providers for the same
+reason -- it is the one canonical provider enum for the whole project.
 """
 
 from dataclasses import dataclass
@@ -19,8 +19,8 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
+from app.core.providers import Provider
 from app.models.campaign import CampaignBudgetType, CampaignObjective
-from app.models.campaign_deployment import CampaignDeploymentProvider
 
 
 @dataclass(frozen=True)
@@ -53,7 +53,7 @@ class CampaignSpec:
 
     campaign_id: UUID
     tenant_id: UUID
-    provider: CampaignDeploymentProvider
+    provider: Provider
     objective: CampaignObjective
     budget: CampaignBudget
     schedule: CampaignSchedule

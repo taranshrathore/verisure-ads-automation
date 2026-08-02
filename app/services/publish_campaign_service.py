@@ -38,12 +38,9 @@ from sqlalchemy.orm import Session
 
 from app.adapters.registry import ProviderAdapterRegistry
 from app.core.exceptions import CampaignNotFoundError, InvalidCampaignStateError
+from app.core.providers import Provider
 from app.models.campaign import Campaign, CampaignStatus
-from app.models.campaign_deployment import (
-    CampaignDeployment,
-    CampaignDeploymentProvider,
-    CampaignDeploymentStatus,
-)
+from app.models.campaign_deployment import CampaignDeployment, CampaignDeploymentStatus
 from app.repositories.campaign_deployment_repository import (
     CampaignDeploymentRepository,
 )
@@ -54,9 +51,9 @@ from app.services.campaign_spec_builder import CampaignSpecBuilder
 # The full set of providers a campaign is deployed to. There is no
 # per-campaign provider selection yet -- every campaign is prepared for
 # every supported provider.
-_SUPPORTED_PROVIDERS: tuple[CampaignDeploymentProvider, ...] = (
-    CampaignDeploymentProvider.META,
-    CampaignDeploymentProvider.GOOGLE,
+_SUPPORTED_PROVIDERS: tuple[Provider, ...] = (
+    Provider.META,
+    Provider.GOOGLE,
 )
 
 # Must not exceed CampaignDeployment.last_error_message's column width

@@ -17,13 +17,11 @@ from app.adapters.meta_adapter import MetaAdapter
 from app.adapters.models import PublishResult
 from app.adapters.registry import ProviderAdapterRegistry
 from app.core.campaign_spec import CampaignBudget, CampaignSchedule, CampaignSpec
+from app.core.providers import Provider
 from app.models.campaign import CampaignBudgetType, CampaignObjective
-from app.models.campaign_deployment import CampaignDeploymentProvider
 
 
-def _make_spec(
-    provider: CampaignDeploymentProvider = CampaignDeploymentProvider.META,
-) -> CampaignSpec:
+def _make_spec(provider: Provider = Provider.META) -> CampaignSpec:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     return CampaignSpec(
         campaign_id=uuid.uuid4(),
@@ -45,7 +43,7 @@ def _make_spec(
 def test_registry_returns_meta_adapter_for_meta_provider() -> None:
     registry = ProviderAdapterRegistry()
 
-    adapter = registry.get(CampaignDeploymentProvider.META)
+    adapter = registry.get(Provider.META)
 
     assert isinstance(adapter, MetaAdapter)
 
@@ -53,7 +51,7 @@ def test_registry_returns_meta_adapter_for_meta_provider() -> None:
 def test_registry_returns_google_adapter_for_google_provider() -> None:
     registry = ProviderAdapterRegistry()
 
-    adapter = registry.get(CampaignDeploymentProvider.GOOGLE)
+    adapter = registry.get(Provider.GOOGLE)
 
     assert isinstance(adapter, GoogleAdapter)
 
@@ -86,7 +84,7 @@ def test_base_adapter_cannot_be_instantiated_directly() -> None:
 
 def test_meta_adapter_publish_raises_not_implemented() -> None:
     with pytest.raises(NotImplementedError):
-        MetaAdapter().publish(_make_spec(CampaignDeploymentProvider.META))
+        MetaAdapter().publish(_make_spec(Provider.META))
 
 
 def test_meta_adapter_pause_raises_not_implemented() -> None:
@@ -101,7 +99,7 @@ def test_meta_adapter_resume_raises_not_implemented() -> None:
 
 def test_google_adapter_publish_raises_not_implemented() -> None:
     with pytest.raises(NotImplementedError):
-        GoogleAdapter().publish(_make_spec(CampaignDeploymentProvider.GOOGLE))
+        GoogleAdapter().publish(_make_spec(Provider.GOOGLE))
 
 
 def test_google_adapter_pause_raises_not_implemented() -> None:

@@ -7,11 +7,8 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.models.campaign_deployment import (
-    CampaignDeployment,
-    CampaignDeploymentProvider,
-    CampaignDeploymentStatus,
-)
+from app.core.providers import Provider
+from app.models.campaign_deployment import CampaignDeployment, CampaignDeploymentStatus
 
 # Sentinel distinguishing "caller did not pass this field" from "caller
 # explicitly passed None" in update_status, so an unrelated status change
@@ -54,7 +51,7 @@ class CampaignDeploymentRepository:
         self,
         tenant_id: UUID,
         campaign_id: UUID,
-        provider: CampaignDeploymentProvider,
+        provider: Provider,
     ) -> CampaignDeployment | None:
         """Return the tenant-scoped deployment for one campaign+provider pair, or None."""
         return self._session.scalar(
@@ -71,8 +68,8 @@ class CampaignDeploymentRepository:
         """Return every tenant-scoped deployment for one campaign.
 
         Not paginated: uq_campaign_deployments_campaign_id_provider bounds
-        this to at most one row per CampaignDeploymentProvider member.
-        Ordered by created_at/id for a deterministic result.
+        this to at most one row per Provider member. Ordered by
+        created_at/id for a deterministic result.
         """
         stmt = (
             select(CampaignDeployment)

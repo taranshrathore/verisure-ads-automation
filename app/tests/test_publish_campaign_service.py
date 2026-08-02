@@ -15,11 +15,9 @@ from sqlalchemy.orm import Session
 
 from app.adapters.registry import ProviderAdapterRegistry
 from app.core.exceptions import CampaignNotFoundError, InvalidCampaignStateError
+from app.core.providers import Provider
 from app.models.campaign import Campaign, CampaignStatus
-from app.models.campaign_deployment import (
-    CampaignDeploymentProvider,
-    CampaignDeploymentStatus,
-)
+from app.models.campaign_deployment import CampaignDeploymentStatus
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.repositories.campaign_deployment_repository import (
@@ -155,7 +153,7 @@ def test_publish_creates_meta_deployment(
     )
 
     meta = next(
-        d for d in deployments if d.provider == CampaignDeploymentProvider.META
+        d for d in deployments if d.provider == Provider.META
     )
     assert meta.status == CampaignDeploymentStatus.FAILED
     assert meta.last_error_message is not None
@@ -177,7 +175,7 @@ def test_publish_creates_google_deployment(
     )
 
     google = next(
-        d for d in deployments if d.provider == CampaignDeploymentProvider.GOOGLE
+        d for d in deployments if d.provider == Provider.GOOGLE
     )
     assert google.status == CampaignDeploymentStatus.FAILED
     assert google.last_error_message is not None
@@ -197,8 +195,8 @@ def test_publish_creates_exactly_one_deployment_per_supported_provider(
 
     providers = {d.provider for d in deployments}
     assert providers == {
-        CampaignDeploymentProvider.META,
-        CampaignDeploymentProvider.GOOGLE,
+        Provider.META,
+        Provider.GOOGLE,
     }
     assert len(deployments) == 2
 
@@ -241,7 +239,7 @@ def test_existing_deployment_is_reused_not_recreated_or_reset(
     pre_existing = deployment_service.create_pending_deployment(
         tenant_id=tenant.id,
         campaign_id=campaign.id,
-        provider=CampaignDeploymentProvider.META,
+        provider=Provider.META,
     )
     submitted = deployment_service.mark_submitted(
         tenant_id=tenant.id,
@@ -254,7 +252,7 @@ def test_existing_deployment_is_reused_not_recreated_or_reset(
     )
 
     meta = next(
-        d for d in deployments if d.provider == CampaignDeploymentProvider.META
+        d for d in deployments if d.provider == Provider.META
     )
     assert meta.id == submitted.id
     assert meta.status == CampaignDeploymentStatus.SUBMITTED

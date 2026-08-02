@@ -7,19 +7,19 @@ instantiates each concrete adapter once and looks it up by provider.
 from app.adapters.base_adapter import BaseAdapter
 from app.adapters.google_adapter import GoogleAdapter
 from app.adapters.meta_adapter import MetaAdapter
-from app.models.campaign_deployment import CampaignDeploymentProvider
+from app.core.providers import Provider
 
 
 class ProviderAdapterRegistry:
-    """Maps a CampaignDeploymentProvider to its BaseAdapter instance."""
+    """Maps a Provider to its BaseAdapter instance."""
 
     def __init__(self) -> None:
-        self._adapters: dict[CampaignDeploymentProvider, BaseAdapter] = {
-            CampaignDeploymentProvider.META: MetaAdapter(),
-            CampaignDeploymentProvider.GOOGLE: GoogleAdapter(),
+        self._adapters: dict[Provider, BaseAdapter] = {
+            Provider.META: MetaAdapter(),
+            Provider.GOOGLE: GoogleAdapter(),
         }
 
-    def get(self, provider: CampaignDeploymentProvider) -> BaseAdapter:
+    def get(self, provider: Provider) -> BaseAdapter:
         """Return the adapter instance registered for provider.
 
         Raises ValueError if provider has no registered adapter.

@@ -145,6 +145,85 @@ class InvalidCampaignDeploymentStateError(AppError):
         super().__init__(message)
 
 
+class ProviderConnectionNotFoundError(AppError):
+    """Raised when a provider connection cannot be found within the
+    caller's tenant.
+
+    Also used for cross-tenant lookups (a connection that exists but
+    belongs to a different tenant) -- deliberately indistinguishable
+    from a genuinely missing connection, matching CampaignNotFoundError's
+    existing pattern, to avoid leaking cross-tenant existence. Also used
+    by get_decrypted_credentials for a disconnected/missing/cross-tenant
+    provider, for the same reason.
+    """
+
+    def __init__(self, message: str = "Provider connection not found.") -> None:
+        super().__init__(message)
+
+
+class ProviderConnectionAlreadyExistsError(AppError):
+    """Raised by connect() when the caller's tenant already has a
+    CONNECTED row for the requested provider.
+
+    uq_provider_connections_tenant_id_provider guarantees at most one row
+    per (tenant_id, provider) ever exists; this is specifically the
+    already-connected case of that pair (see
+    InvalidProviderConnectionStateError for the already-disconnected
+    case).
+    """
+
+    def __init__(
+        self, message: str = "A connection to this provider already exists."
+    ) -> None:
+        super().__init__(message)
+
+
+class InvalidProviderConnectionStateError(AppError):
+    """Raised when an operation is attempted against a provider connection
+    whose current state does not allow it: connect() targeting a
+    (tenant, provider) pair that already has a DISCONNECTED row (this
+    milestone intentionally keeps disconnected terminal -- reconnection
+    is not implemented yet), or disconnect() targeting a row that is not
+    currently CONNECTED (already disconnected, or changed concurrently
+    since the caller's read).
+    """
+
+    def __init__(
+        self,
+        message: str = "Provider connection is not in a valid state for this operation.",
+    ) -> None:
+        super().__init__(message)
+
+
+class CredentialEncryptionUnavailableError(AppError):
+    """Raised when CredentialEncryptionService cannot be constructed or used
+    because ENCRYPTION_KEY is missing, blank, or malformed.
+
+    This is a configuration/deployment problem, not a per-request input
+    error -- credential encryption fails closed rather than ever falling
+    back to storing or returning plaintext.
+    """
+
+    def __init__(self, message: str = "Credential encryption is unavailable.") -> None:
+        super().__init__(message)
+
+
+class CredentialDecryptionError(AppError):
+    """Raised when stored ciphertext cannot be turned back into credential
+    bytes: wrong/rotated-out key, tampered ciphertext, malformed envelope
+    JSON/base64, an unsupported envelope version, or an envelope whose
+    tenant_id/provider does not match the requested context.
+
+    The message is always a short, generic string -- it deliberately never
+    distinguishes *why* decryption failed, since doing so would help an
+    attacker probing stored ciphertext, and it never contains plaintext,
+    ciphertext, or key material.
+    """
+
+    def __init__(self, message: str = "Unable to decrypt stored credentials.") -> None:
+        super().__init__(message)
+
+
 # NOTE: The local RBAC exception hierarchy (AuthorizationError,
 # PermissionDeniedError, CrossTenantAccessError, RoleNotFoundError,
 # PermissionNotFoundError, RoleAssignmentConflictError, ProtectedRoleError,

@@ -9,12 +9,9 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from app.core.providers import Provider
 from app.models.campaign import Campaign
-from app.models.campaign_deployment import (
-    CampaignDeployment,
-    CampaignDeploymentProvider,
-    CampaignDeploymentStatus,
-)
+from app.models.campaign_deployment import CampaignDeployment, CampaignDeploymentStatus
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.repositories.campaign_deployment_repository import (
@@ -55,7 +52,7 @@ def _make_pending_deployment(
     deployment = CampaignDeployment(
         tenant_id=tenant.id,
         campaign_id=campaign.id,
-        provider=CampaignDeploymentProvider.META,
+        provider=Provider.META,
         idempotency_key=str(uuid.uuid4()),
         status=CampaignDeploymentStatus.PENDING,
     )

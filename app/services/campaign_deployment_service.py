@@ -26,11 +26,8 @@ from app.core.exceptions import (
     CampaignDeploymentNotFoundError,
     InvalidCampaignDeploymentStateError,
 )
-from app.models.campaign_deployment import (
-    CampaignDeployment,
-    CampaignDeploymentProvider,
-    CampaignDeploymentStatus,
-)
+from app.core.providers import Provider
+from app.models.campaign_deployment import CampaignDeployment, CampaignDeploymentStatus
 from app.repositories.campaign_deployment_repository import (
     CampaignDeploymentRepository,
 )
@@ -74,7 +71,7 @@ class CampaignDeploymentService:
         *,
         tenant_id: uuid.UUID,
         campaign_id: uuid.UUID,
-        provider: CampaignDeploymentProvider,
+        provider: Provider,
     ) -> CampaignDeployment:
         """Create a new pending deployment for one campaign+provider pair.
 

@@ -14,11 +14,9 @@ import pytest
 
 from app.core.campaign_spec import CampaignBudget, CampaignSchedule, CampaignSpec
 from app.core.exceptions import CampaignValidationError
+from app.core.providers import Provider
 from app.models.campaign import Campaign, CampaignBudgetType, CampaignObjective
-from app.models.campaign_deployment import (
-    CampaignDeployment,
-    CampaignDeploymentProvider,
-)
+from app.models.campaign_deployment import CampaignDeployment
 from app.services.campaign_spec_builder import CampaignSpecBuilder
 
 
@@ -42,7 +40,7 @@ def _make_complete_campaign(**overrides: object) -> Campaign:
 
 def _make_deployment(
     campaign: Campaign,
-    provider: CampaignDeploymentProvider = CampaignDeploymentProvider.META,
+    provider: Provider = Provider.META,
 ) -> CampaignDeployment:
     return CampaignDeployment(
         id=uuid.uuid4(),
@@ -64,13 +62,13 @@ def test_build_succeeds_for_a_complete_campaign() -> None:
 
 def test_build_maps_exact_values() -> None:
     campaign = _make_complete_campaign()
-    deployment = _make_deployment(campaign, provider=CampaignDeploymentProvider.GOOGLE)
+    deployment = _make_deployment(campaign, provider=Provider.GOOGLE)
 
     spec = CampaignSpecBuilder.build(campaign, deployment)
 
     assert spec.campaign_id == campaign.id
     assert spec.tenant_id == campaign.tenant_id
-    assert spec.provider == CampaignDeploymentProvider.GOOGLE
+    assert spec.provider == Provider.GOOGLE
     assert spec.objective == campaign.objective
     assert spec.budget == CampaignBudget(
         type=campaign.budget_type,
