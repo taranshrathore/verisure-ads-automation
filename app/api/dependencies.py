@@ -27,6 +27,7 @@ from fastapi.security import OAuth2PasswordBearer
 from jwt import PyJWTError
 from sqlalchemy.orm import Session
 
+from app.adapters.registry import ProviderAdapterRegistry
 from app.core.exceptions import (
     InvalidAccessTokenError,
     TenantInactiveError,
@@ -37,12 +38,18 @@ from app.core.exceptions import (
 from app.core.security.jwt import decode_access_token
 from app.database.session import SessionFactory
 from app.models.user import User
+from app.repositories.campaign_deployment_repository import (
+    CampaignDeploymentRepository,
+)
 from app.repositories.campaign_repository import CampaignRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.tenant_repository import TenantRepository
 from app.repositories.user_repository import UserRepository
 from app.services.auth_service import AuthService
+from app.services.campaign_deployment_service import CampaignDeploymentService
 from app.services.campaign_service import CampaignService
+from app.services.campaign_spec_builder import CampaignSpecBuilder
+from app.services.publish_campaign_service import PublishCampaignService
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
 
@@ -102,6 +109,74 @@ def get_campaign_service(
 ) -> CampaignService:
     """Provide a freshly constructed CampaignService for the current request."""
     return CampaignService(campaign_repository=campaign_repository, session=db)
+
+
+def get_campaign_deployment_repository(
+    db: Session = Depends(get_db),
+) -> CampaignDeploymentRepository:
+    """Provide a CampaignDeploymentRepository bound to the request session."""
+    return CampaignDeploymentRepository(db)
+
+
+def get_campaign_deployment_service(
+    db: Session = Depends(get_db),
+    deployment_repository: CampaignDeploymentRepository = Depends(
+        get_campaign_deployment_repository
+    ),
+) -> CampaignDeploymentService:
+    """Provide a freshly constructed CampaignDeploymentService for the current request."""
+    return CampaignDeploymentService(deployment_repository, db)
+
+
+def get_campaign_spec_builder() -> CampaignSpecBuilder:
+    """Provide a CampaignSpecBuilder.
+
+    Stateless (a plain staticmethod holder) -- safe to construct fresh
+    per request rather than sharing a singleton.
+    """
+    return CampaignSpecBuilder()
+
+
+def get_provider_adapter_registry() -> ProviderAdapterRegistry:
+    """Provide a ProviderAdapterRegistry.
+
+    Stateless today (its adapters hold no connection/session/mutable
+    state of their own -- see app/adapters/registry.py), so a fresh
+    instance per request is constructed here rather than sharing a
+    global singleton.
+    """
+    return ProviderAdapterRegistry()
+
+
+def get_publish_campaign_service(
+    db: Session = Depends(get_db),
+    campaign_repository: CampaignRepository = Depends(get_campaign_repository),
+    deployment_repository: CampaignDeploymentRepository = Depends(
+        get_campaign_deployment_repository
+    ),
+    deployment_service: CampaignDeploymentService = Depends(
+        get_campaign_deployment_service
+    ),
+    spec_builder: CampaignSpecBuilder = Depends(get_campaign_spec_builder),
+    adapter_registry: ProviderAdapterRegistry = Depends(get_provider_adapter_registry),
+) -> PublishCampaignService:
+    """Provide a freshly constructed PublishCampaignService for the current request.
+
+    Every dependency here is itself request-scoped (deployment_service
+    and campaign_repository/deployment_repository all resolve to the
+    same get_db session via FastAPI's per-request dependency caching),
+    so there is exactly one Session, one CampaignDeploymentService, and
+    one CampaignRepository/CampaignDeploymentRepository pair per
+    request -- no duplicate construction paths.
+    """
+    return PublishCampaignService(
+        campaign_repository,
+        deployment_repository,
+        deployment_service,
+        spec_builder,
+        adapter_registry,
+        db,
+    )
 
 
 def _unauthorized(detail: str) -> HTTPException:

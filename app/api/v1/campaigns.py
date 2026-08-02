@@ -1,9 +1,18 @@
 """Campaign management endpoints.
 
 MILESTONE 1 SCOPE: draft creation/listing/retrieval/editing and
-draft-to-archived only. There is no "ready"/publish transition and no
-provider (Meta/Google) integration yet -- see app/models/campaign.py and
-app/services/campaign_service.py.
+draft-to-archived only -- see app/models/campaign.py and
+app/services/campaign_service.py. There is still no "ready" transition.
+
+MILESTONE 6 ADDITION: publish and deployment-listing endpoints wire the
+already-built PublishCampaignService/CampaignDeploymentService into
+HTTP (see app/services/publish_campaign_service.py). Real Meta/Google
+provider adapters still raise NotImplementedError (see app/adapters/),
+so today every publish attempt currently ends with FAILED deployments
+rather than SUBMITTED/LIVE ones -- this is expected until a future
+milestone gives the adapters a real implementation, not a bug in this
+wiring. No provider-specific branching exists in this router: both
+endpoints below only orchestrate through PublishCampaignService.
 
 AUTHORIZATION STATE: every route below enforces authentication only
 (Depends(get_current_user)); there is no local RBAC/permission check.
@@ -23,10 +32,20 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.dependencies import get_campaign_service, get_current_user
+from app.api.dependencies import (
+    get_campaign_service,
+    get_current_user,
+    get_publish_campaign_service,
+)
 from app.models.campaign import Campaign, CampaignBudgetType, CampaignObjective, CampaignStatus
+from app.models.campaign_deployment import (
+    CampaignDeployment,
+    CampaignDeploymentProvider,
+    CampaignDeploymentStatus,
+)
 from app.models.user import User
 from app.services.campaign_service import CampaignService
+from app.services.publish_campaign_service import PublishCampaignService
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
@@ -113,6 +132,54 @@ class CampaignListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     items: list[CampaignRead] = Field(default_factory=list)
+
+
+class CampaignDeploymentRead(BaseModel):
+    """Response body representing a single campaign deployment.
+
+    Deliberately omits idempotency_key: it is an internal
+    duplicate-publish safeguard (see
+    app/services/campaign_deployment_service.py), not something a
+    client has a proven need to read.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    campaign_id: UUID
+    provider: CampaignDeploymentProvider
+    status: CampaignDeploymentStatus
+    external_campaign_id: str | None
+    submitted_at: datetime | None
+    confirmed_at: datetime | None
+    last_error_message: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_model(cls, deployment: CampaignDeployment) -> "CampaignDeploymentRead":
+        """Build a CampaignDeploymentRead from a CampaignDeployment ORM instance."""
+        return cls(
+            id=deployment.id,
+            campaign_id=deployment.campaign_id,
+            provider=deployment.provider,
+            status=deployment.status,
+            external_campaign_id=deployment.external_campaign_id,
+            submitted_at=deployment.submitted_at,
+            confirmed_at=deployment.confirmed_at,
+            last_error_message=deployment.last_error_message,
+            created_at=deployment.created_at,
+            updated_at=deployment.updated_at,
+        )
+
+
+class CampaignDeploymentListResponse(BaseModel):
+    """Response body for POST /campaigns/{campaign_id}/publish and
+    GET /campaigns/{campaign_id}/deployments."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[CampaignDeploymentRead] = Field(default_factory=list)
 
 
 @router.post(
@@ -233,3 +300,53 @@ def archive_campaign(
         tenant_id=current_user.tenant_id, campaign_id=campaign_id
     )
     return CampaignRead.from_model(campaign)
+
+
+@router.post(
+    "/{campaign_id}/publish",
+    status_code=status.HTTP_200_OK,
+    response_model=CampaignDeploymentListResponse,
+    summary="Publish a campaign to every supported provider",
+    description="Ensure a deployment exists for every supported "
+    "provider (Meta, Google) and attempt to publish each one that is "
+    "still pending; a deployment already past pending is returned "
+    "unchanged rather than re-attempted. Real provider adapters are "
+    "not implemented yet, so a newly attempted deployment currently "
+    "ends up failed rather than submitted -- see app/adapters/. "
+    "Publishing an archived campaign returns 409.",
+)
+def publish_campaign(
+    campaign_id: UUID,
+    current_user: User = Depends(get_current_user),
+    publish_service: PublishCampaignService = Depends(get_publish_campaign_service),
+) -> CampaignDeploymentListResponse:
+    """Publish a campaign, returning the resulting deployment records."""
+    deployments = publish_service.publish_campaign(
+        tenant_id=current_user.tenant_id, campaign_id=campaign_id
+    )
+    return CampaignDeploymentListResponse(
+        items=[CampaignDeploymentRead.from_model(d) for d in deployments]
+    )
+
+
+@router.get(
+    "/{campaign_id}/deployments",
+    status_code=status.HTTP_200_OK,
+    response_model=CampaignDeploymentListResponse,
+    summary="List a campaign's provider deployments",
+    description="Return every deployment record for one campaign, in "
+    "deterministic order. A campaign belonging to another tenant is "
+    "indistinguishable from a missing one (404).",
+)
+def list_campaign_deployments(
+    campaign_id: UUID,
+    current_user: User = Depends(get_current_user),
+    publish_service: PublishCampaignService = Depends(get_publish_campaign_service),
+) -> CampaignDeploymentListResponse:
+    """Return a tenant-scoped, campaign-scoped list of deployments."""
+    deployments = publish_service.list_deployments(
+        tenant_id=current_user.tenant_id, campaign_id=campaign_id
+    )
+    return CampaignDeploymentListResponse(
+        items=[CampaignDeploymentRead.from_model(d) for d in deployments]
+    )

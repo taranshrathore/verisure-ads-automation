@@ -19,6 +19,17 @@ Deployments that were already past PENDING (submitted/live/paused/
 failed) when the graph was prepared are returned exactly as found --
 they are never re-published or reset by a later publish_campaign()
 call.
+
+MILESTONE 6 ADDITION: list_deployments() is a pure read alongside
+publish_campaign() -- it confirms the campaign belongs to the caller's
+tenant (the same rule publish_campaign() itself applies) and returns
+that campaign's existing deployments without creating, dispatching, or
+mutating anything. It lives here rather than on
+CampaignDeploymentService because it needs both CampaignRepository
+(ownership check) and CampaignDeploymentRepository (the actual list),
+which this service already composes -- adding it to
+CampaignDeploymentService would mean threading a CampaignRepository
+into a constructor that has no other reason to depend on it.
 """
 
 import uuid
@@ -145,6 +156,22 @@ class PublishCampaignService:
             deployments.append(deployment)
 
         return deployments
+
+    def list_deployments(
+        self, *, tenant_id: uuid.UUID, campaign_id: uuid.UUID
+    ) -> list[CampaignDeployment]:
+        """Return every deployment for one campaign, in deterministic order.
+
+        Raises CampaignNotFoundError if the campaign does not exist for
+        this tenant -- including a cross-tenant lookup, deliberately
+        indistinguishable from a genuinely missing campaign, matching
+        publish_campaign's own rule. Does not create, dispatch, or
+        mutate anything.
+        """
+        campaign = self._campaigns.get_by_tenant_and_id(tenant_id, campaign_id)
+        if campaign is None:
+            raise CampaignNotFoundError()
+        return self._deployments.list_by_campaign(tenant_id, campaign.id)
 
     def _attempt_provider_publish(
         self, tenant_id: uuid.UUID, campaign: Campaign, deployment: CampaignDeployment
