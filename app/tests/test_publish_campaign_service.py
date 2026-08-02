@@ -13,9 +13,12 @@ import uuid
 import pytest
 from sqlalchemy.orm import Session
 
+from cryptography.fernet import Fernet
+
 from app.adapters.registry import ProviderAdapterRegistry
 from app.core.exceptions import CampaignNotFoundError, InvalidCampaignStateError
 from app.core.providers import Provider
+from app.core.security.credential_encryption import CredentialEncryptionService
 from app.models.campaign import Campaign, CampaignStatus
 from app.models.campaign_deployment import CampaignDeploymentStatus
 from app.models.tenant import Tenant
@@ -24,9 +27,15 @@ from app.repositories.campaign_deployment_repository import (
     CampaignDeploymentRepository,
 )
 from app.repositories.campaign_repository import CampaignRepository
+from app.repositories.provider_connection_repository import (
+    ProviderConnectionRepository,
+)
 from app.services.campaign_deployment_service import CampaignDeploymentService
 from app.services.campaign_spec_builder import CampaignSpecBuilder
+from app.services.provider_connection_service import ProviderConnectionService
 from app.services.publish_campaign_service import PublishCampaignService
+
+_TEST_ENCRYPTION_KEY = Fernet.generate_key().decode("ascii")
 
 
 @pytest.fixture
@@ -42,9 +51,19 @@ def deployment_service(
 
 
 @pytest.fixture
+def connection_service(db_session: Session) -> ProviderConnectionService:
+    return ProviderConnectionService(
+        ProviderConnectionRepository(db_session),
+        CredentialEncryptionService(_TEST_ENCRYPTION_KEY),
+        db_session,
+    )
+
+
+@pytest.fixture
 def publish_service(
     deployment_repository: CampaignDeploymentRepository,
     deployment_service: CampaignDeploymentService,
+    connection_service: ProviderConnectionService,
     db_session: Session,
 ) -> PublishCampaignService:
     return PublishCampaignService(
@@ -53,6 +72,7 @@ def publish_service(
         deployment_service,
         CampaignSpecBuilder(),
         ProviderAdapterRegistry(),
+        connection_service,
         db_session,
     )
 

@@ -13,10 +13,12 @@ partially-applied, uncommitted transaction (or a session stuck needing a
 rollback it never got) behind for the next caller.
 
 PHASE 4 SCOPE: connect/disconnect/read/decrypt only. No OAuth, no
-adapter integration, no provider HTTP calls, no background jobs. connect()
-intentionally treats an existing DISCONNECTED row as terminal --
-reactivating it (reconnection) is deferred to a future milestone; see
-connect()'s docstring.
+provider HTTP calls, no background jobs. get_decrypted_credentials() is
+consumed by PublishCampaignService for adapter credential injection;
+there is still no connect/OAuth HTTP API. connect() intentionally treats
+an existing DISCONNECTED row as terminal -- reactivating it
+(reconnection) is deferred to a future milestone; see connect()'s
+docstring.
 """
 
 import uuid
@@ -187,10 +189,11 @@ class ProviderConnectionService:
         """Return the decrypted credential bytes for one tenant's
         currently connected provider.
 
-        Internal-only seam for a future adapter-integration caller: no
-        API route exists (or should ever exist) that returns this value
-        to a client. Raises ProviderConnectionNotFoundError if there is
-        no CONNECTED row with usable ciphertext for this
+        Internal-only seam for PublishCampaignService (which wraps the
+        result in ProviderCredentials before calling adapter.publish):
+        no API route exists (or should ever exist) that returns this
+        value to a client. Raises ProviderConnectionNotFoundError if
+        there is no CONNECTED row with usable ciphertext for this
         (tenant, provider) pair -- missing, cross-tenant, and
         disconnected are all indistinguishable here, matching this
         codebase's existing not-found pattern. Decryption failures

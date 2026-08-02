@@ -17,25 +17,60 @@ always-successful adapter registry via a FastAPI dependency override
 verify the success-path response shape end to end.
 """
 
+from collections.abc import Iterator
 from uuid import UUID
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.adapters.base_adapter import BaseAdapter
 from app.adapters.models import PublishResult
-from app.api.dependencies import get_provider_adapter_registry
+from app.api.dependencies import (
+    get_credential_encryption_service,
+    get_provider_adapter_registry,
+)
 from app.core.campaign_spec import CampaignSpec
+from app.core.provider_credentials import ProviderCredentials
 from app.core.providers import Provider
+from app.core.security.credential_encryption import CredentialEncryptionService
 from app.main import app
 from app.repositories.campaign_deployment_repository import (
     CampaignDeploymentRepository,
 )
+from app.repositories.provider_connection_repository import (
+    ProviderConnectionRepository,
+)
 from app.services.campaign_deployment_service import CampaignDeploymentService
+from app.services.provider_connection_service import ProviderConnectionService
+
+_TEST_ENCRYPTION_KEY = Fernet.generate_key().decode("ascii")
 
 CAMPAIGNS_URL = "/api/v1/campaigns"
 _NIL_UUID = "00000000-0000-0000-0000-000000000000"
+
+
+@pytest.fixture
+def encryption_service() -> CredentialEncryptionService:
+    return CredentialEncryptionService(_TEST_ENCRYPTION_KEY)
+
+
+@pytest.fixture(autouse=True)
+def _override_encryption_service(
+    encryption_service: CredentialEncryptionService,
+) -> Iterator[None]:
+    """PublishCampaignService now depends on ProviderConnectionService,
+    which constructs CredentialEncryptionService from ENCRYPTION_KEY.
+    Override so these API tests do not require a real key in .env.
+    """
+    app.dependency_overrides[get_credential_encryption_service] = (
+        lambda: encryption_service
+    )
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_credential_encryption_service, None)
 
 
 def _auth_headers(token: str) -> dict[str, str]:
@@ -331,7 +366,10 @@ class _FakeSuccessAdapter(BaseAdapter):
     def __init__(self, external_campaign_id: str) -> None:
         self._external_campaign_id = external_campaign_id
 
-    def publish(self, spec: CampaignSpec) -> PublishResult:
+    def publish(
+        self, spec: CampaignSpec, credentials: ProviderCredentials
+    ) -> PublishResult:
+        del credentials
         return PublishResult(
             success=True,
             external_campaign_id=self._external_campaign_id,
@@ -369,15 +407,30 @@ def fake_success_registry() -> _FakeAdapterRegistry:
 
 
 def test_publish_with_fake_success_adapter_returns_submitted_status(
-    client: TestClient, auth_fixture, fake_success_registry: _FakeAdapterRegistry
+    client: TestClient,
+    auth_fixture,
+    db_session: Session,
+    fake_success_registry: _FakeAdapterRegistry,
+    encryption_service: CredentialEncryptionService,
 ) -> None:
     """Focused test verifying the HTTP success-path response shape end
-    to end. Only the get_provider_adapter_registry dependency is
-    overridden for the duration of this test -- authentication, the
-    database session, and every other dependency run unmodified.
+    to end. get_provider_adapter_registry is overridden; provider
+    connections are seeded via the service layer (no connect API yet)
+    using the same encryption key the request path uses.
     """
-    _, token = auth_fixture()
+    user, token = auth_fixture()
     created = _create_complete_campaign(client, token)
+    connection_service = ProviderConnectionService(
+        ProviderConnectionRepository(db_session),
+        encryption_service,
+        db_session,
+    )
+    for provider in (Provider.META, Provider.GOOGLE):
+        connection_service.connect(
+            tenant_id=user.tenant_id,
+            provider=provider,
+            credential_payload=b"opaque-http-success-credential",
+        )
 
     app.dependency_overrides[get_provider_adapter_registry] = (
         lambda: fake_success_registry

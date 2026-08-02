@@ -27,16 +27,21 @@ Future implementation will need to:
 from app.adapters.base_adapter import BaseAdapter
 from app.adapters.models import PublishResult
 from app.core.campaign_spec import CampaignSpec
+from app.core.provider_credentials import ProviderCredentials
 
 
 class GoogleAdapter(BaseAdapter):
     """Adapter for the Google Ads API. Not implemented yet."""
 
-    def publish(self, spec: CampaignSpec) -> PublishResult:
+    def publish(
+        self, spec: CampaignSpec, credentials: ProviderCredentials
+    ) -> PublishResult:
         """Create a campaign via the Google Ads API's CampaignService.
 
         Not implemented: requires OAuth (see module docstring) and a
-        Google Ads API client, neither of which exist yet.
+        Google Ads API client, neither of which exist yet. credentials
+        is accepted so the publish seam matches BaseAdapter; this method
+        must not decrypt or fetch credentials itself.
         """
         raise NotImplementedError("GoogleAdapter.publish is not implemented yet.")
 

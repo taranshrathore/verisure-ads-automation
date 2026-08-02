@@ -16,12 +16,15 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+from cryptography.fernet import Fernet
 from sqlalchemy.orm import Session
 
 from app.adapters.base_adapter import BaseAdapter
 from app.adapters.models import PublishResult
 from app.core.campaign_spec import CampaignSpec
+from app.core.provider_credentials import ProviderCredentials
 from app.core.providers import Provider
+from app.core.security.credential_encryption import CredentialEncryptionService
 from app.models.campaign import Campaign, CampaignBudgetType, CampaignObjective
 from app.models.campaign_deployment import CampaignDeployment, CampaignDeploymentStatus
 from app.models.tenant import Tenant
@@ -30,9 +33,16 @@ from app.repositories.campaign_deployment_repository import (
     CampaignDeploymentRepository,
 )
 from app.repositories.campaign_repository import CampaignRepository
+from app.repositories.provider_connection_repository import (
+    ProviderConnectionRepository,
+)
 from app.services.campaign_deployment_service import CampaignDeploymentService
 from app.services.campaign_spec_builder import CampaignSpecBuilder
+from app.services.provider_connection_service import ProviderConnectionService
 from app.services.publish_campaign_service import PublishCampaignService
+
+_TEST_ENCRYPTION_KEY = Fernet.generate_key().decode("ascii")
+_DEFAULT_CREDENTIAL_PAYLOAD = b"opaque-adapter-integ-credential"
 
 # --- Fake adapters -------------------------------------------------------------
 
@@ -43,7 +53,10 @@ class FakeSuccessAdapter(BaseAdapter):
     def __init__(self, external_campaign_id: str) -> None:
         self._external_campaign_id = external_campaign_id
 
-    def publish(self, spec: CampaignSpec) -> PublishResult:
+    def publish(
+        self, spec: CampaignSpec, credentials: ProviderCredentials
+    ) -> PublishResult:
+        del credentials
         return PublishResult(
             success=True,
             external_campaign_id=self._external_campaign_id,
@@ -63,7 +76,10 @@ class FakeFailureAdapter(BaseAdapter):
     def __init__(self, error_message: str) -> None:
         self._error_message = error_message
 
-    def publish(self, spec: CampaignSpec) -> PublishResult:
+    def publish(
+        self, spec: CampaignSpec, credentials: ProviderCredentials
+    ) -> PublishResult:
+        del credentials
         return PublishResult(
             success=False,
             external_campaign_id=None,
@@ -90,7 +106,10 @@ class FakeExceptionAdapter(BaseAdapter):
             "simulated adapter crash"
         )
 
-    def publish(self, spec: CampaignSpec) -> PublishResult:
+    def publish(
+        self, spec: CampaignSpec, credentials: ProviderCredentials
+    ) -> PublishResult:
+        del credentials
         raise self._exception_to_raise
 
     def pause(self, external_campaign_id: str) -> None:
@@ -135,9 +154,33 @@ def deployment_service(
     return CampaignDeploymentService(deployment_repository, db_session)
 
 
+@pytest.fixture
+def connection_service(db_session: Session) -> ProviderConnectionService:
+    return ProviderConnectionService(
+        ProviderConnectionRepository(db_session),
+        CredentialEncryptionService(_TEST_ENCRYPTION_KEY),
+        db_session,
+    )
+
+
+def _connect_supported_providers(
+    connection_service: ProviderConnectionService,
+    *,
+    tenant_id,
+    credential_payload: bytes = _DEFAULT_CREDENTIAL_PAYLOAD,
+) -> None:
+    for provider in (Provider.META, Provider.GOOGLE):
+        connection_service.connect(
+            tenant_id=tenant_id,
+            provider=provider,
+            credential_payload=credential_payload,
+        )
+
+
 def _make_publish_service(
     deployment_repository: CampaignDeploymentRepository,
     deployment_service: CampaignDeploymentService,
+    connection_service: ProviderConnectionService,
     db_session: Session,
     adapter_registry: FakeAdapterRegistry,
 ) -> PublishCampaignService:
@@ -147,6 +190,7 @@ def _make_publish_service(
         deployment_service,
         CampaignSpecBuilder(),
         adapter_registry,  # type: ignore[arg-type]
+        connection_service,
         db_session,
     )
 
@@ -208,10 +252,12 @@ def _by_provider(
 def test_both_providers_succeed(
     deployment_repository: CampaignDeploymentRepository,
     deployment_service: CampaignDeploymentService,
+    connection_service: ProviderConnectionService,
     db_session: Session,
 ) -> None:
     tenant, user = _make_tenant_and_user(db_session, suffix="a")
     campaign = _make_complete_campaign(db_session, tenant, user)
+    _connect_supported_providers(connection_service, tenant_id=tenant.id)
     registry = FakeAdapterRegistry(
         {
             Provider.META: FakeSuccessAdapter("meta-ext-1"),
@@ -219,7 +265,7 @@ def test_both_providers_succeed(
         }
     )
     service = _make_publish_service(
-        deployment_repository, deployment_service, db_session, registry
+        deployment_repository, deployment_service, connection_service, db_session, registry
     )
 
     deployments = service.publish_campaign(tenant_id=tenant.id, campaign_id=campaign.id)
@@ -240,10 +286,12 @@ def test_both_providers_succeed(
 def test_one_provider_succeeds_and_one_fails(
     deployment_repository: CampaignDeploymentRepository,
     deployment_service: CampaignDeploymentService,
+    connection_service: ProviderConnectionService,
     db_session: Session,
 ) -> None:
     tenant, user = _make_tenant_and_user(db_session, suffix="b")
     campaign = _make_complete_campaign(db_session, tenant, user)
+    _connect_supported_providers(connection_service, tenant_id=tenant.id)
     registry = FakeAdapterRegistry(
         {
             Provider.META: FakeFailureAdapter(
@@ -253,7 +301,7 @@ def test_one_provider_succeeds_and_one_fails(
         }
     )
     service = _make_publish_service(
-        deployment_repository, deployment_service, db_session, registry
+        deployment_repository, deployment_service, connection_service, db_session, registry
     )
 
     deployments = service.publish_campaign(tenant_id=tenant.id, campaign_id=campaign.id)
@@ -273,10 +321,12 @@ def test_one_provider_succeeds_and_one_fails(
 def test_adapter_exception_is_caught_and_marks_deployment_failed(
     deployment_repository: CampaignDeploymentRepository,
     deployment_service: CampaignDeploymentService,
+    connection_service: ProviderConnectionService,
     db_session: Session,
 ) -> None:
     tenant, user = _make_tenant_and_user(db_session, suffix="c")
     campaign = _make_complete_campaign(db_session, tenant, user)
+    _connect_supported_providers(connection_service, tenant_id=tenant.id)
     registry = FakeAdapterRegistry(
         {
             Provider.META: FakeExceptionAdapter(),
@@ -284,7 +334,7 @@ def test_adapter_exception_is_caught_and_marks_deployment_failed(
         }
     )
     service = _make_publish_service(
-        deployment_repository, deployment_service, db_session, registry
+        deployment_repository, deployment_service, connection_service, db_session, registry
     )
 
     # No exception escapes publish_campaign even though META's adapter raises.
@@ -298,6 +348,7 @@ def test_adapter_exception_is_caught_and_marks_deployment_failed(
 def test_google_is_still_attempted_when_meta_adapter_raises(
     deployment_repository: CampaignDeploymentRepository,
     deployment_service: CampaignDeploymentService,
+    connection_service: ProviderConnectionService,
     db_session: Session,
 ) -> None:
     """META is iterated before GOOGLE (see _SUPPORTED_PROVIDERS); this
@@ -306,6 +357,7 @@ def test_google_is_still_attempted_when_meta_adapter_raises(
     """
     tenant, user = _make_tenant_and_user(db_session, suffix="d")
     campaign = _make_complete_campaign(db_session, tenant, user)
+    _connect_supported_providers(connection_service, tenant_id=tenant.id)
     registry = FakeAdapterRegistry(
         {
             Provider.META: FakeExceptionAdapter(),
@@ -313,7 +365,7 @@ def test_google_is_still_attempted_when_meta_adapter_raises(
         }
     )
     service = _make_publish_service(
-        deployment_repository, deployment_service, db_session, registry
+        deployment_repository, deployment_service, connection_service, db_session, registry
     )
 
     deployments = service.publish_campaign(tenant_id=tenant.id, campaign_id=campaign.id)
@@ -331,6 +383,7 @@ def test_google_is_still_attempted_when_meta_adapter_raises(
 def test_google_is_still_attempted_when_meta_adapter_reports_failure(
     deployment_repository: CampaignDeploymentRepository,
     deployment_service: CampaignDeploymentService,
+    connection_service: ProviderConnectionService,
     db_session: Session,
 ) -> None:
     """Same as above, but META fails via an ordinary PublishResult(success=False)
@@ -338,6 +391,7 @@ def test_google_is_still_attempted_when_meta_adapter_reports_failure(
     """
     tenant, user = _make_tenant_and_user(db_session, suffix="e")
     campaign = _make_complete_campaign(db_session, tenant, user)
+    _connect_supported_providers(connection_service, tenant_id=tenant.id)
     registry = FakeAdapterRegistry(
         {
             Provider.META: FakeFailureAdapter("meta declined"),
@@ -345,7 +399,7 @@ def test_google_is_still_attempted_when_meta_adapter_reports_failure(
         }
     )
     service = _make_publish_service(
-        deployment_repository, deployment_service, db_session, registry
+        deployment_repository, deployment_service, connection_service, db_session, registry
     )
 
     deployments = service.publish_campaign(tenant_id=tenant.id, campaign_id=campaign.id)
@@ -363,6 +417,7 @@ def test_google_is_still_attempted_when_meta_adapter_reports_failure(
 def test_blank_exception_message_gets_a_safe_fallback(
     deployment_repository: CampaignDeploymentRepository,
     deployment_service: CampaignDeploymentService,
+    connection_service: ProviderConnectionService,
     db_session: Session,
 ) -> None:
     """str(RuntimeError("")) == "" -- last_error_message must never end up
@@ -370,6 +425,7 @@ def test_blank_exception_message_gets_a_safe_fallback(
     """
     tenant, user = _make_tenant_and_user(db_session, suffix="f")
     campaign = _make_complete_campaign(db_session, tenant, user)
+    _connect_supported_providers(connection_service, tenant_id=tenant.id)
     registry = FakeAdapterRegistry(
         {
             Provider.META: FakeExceptionAdapter(RuntimeError("")),
@@ -377,7 +433,7 @@ def test_blank_exception_message_gets_a_safe_fallback(
         }
     )
     service = _make_publish_service(
-        deployment_repository, deployment_service, db_session, registry
+        deployment_repository, deployment_service, connection_service, db_session, registry
     )
 
     deployments = service.publish_campaign(tenant_id=tenant.id, campaign_id=campaign.id)
@@ -392,6 +448,7 @@ def test_blank_exception_message_gets_a_safe_fallback(
 def test_overly_long_error_message_is_truncated_to_column_width(
     deployment_repository: CampaignDeploymentRepository,
     deployment_service: CampaignDeploymentService,
+    connection_service: ProviderConnectionService,
     db_session: Session,
 ) -> None:
     """last_error_message is String(2000) -- see
@@ -400,6 +457,7 @@ def test_overly_long_error_message_is_truncated_to_column_width(
     """
     tenant, user = _make_tenant_and_user(db_session, suffix="g")
     campaign = _make_complete_campaign(db_session, tenant, user)
+    _connect_supported_providers(connection_service, tenant_id=tenant.id)
     huge_message = "x" * 5000
     registry = FakeAdapterRegistry(
         {
@@ -408,7 +466,7 @@ def test_overly_long_error_message_is_truncated_to_column_width(
         }
     )
     service = _make_publish_service(
-        deployment_repository, deployment_service, db_session, registry
+        deployment_repository, deployment_service, connection_service, db_session, registry
     )
 
     deployments = service.publish_campaign(tenant_id=tenant.id, campaign_id=campaign.id)
@@ -446,6 +504,7 @@ class _MarkFailedAlwaysRaisesDeploymentService:
 def test_persistence_failure_while_recording_a_failure_propagates(
     deployment_repository: CampaignDeploymentRepository,
     deployment_service: CampaignDeploymentService,
+    connection_service: ProviderConnectionService,
     db_session: Session,
 ) -> None:
     """A real database/persistence failure while recording META's failure
@@ -454,6 +513,7 @@ def test_persistence_failure_while_recording_a_failure_propagates(
     """
     tenant, user = _make_tenant_and_user(db_session, suffix="h")
     campaign = _make_complete_campaign(db_session, tenant, user)
+    _connect_supported_providers(connection_service, tenant_id=tenant.id)
     registry = FakeAdapterRegistry(
         {
             Provider.META: FakeFailureAdapter("meta declined"),
@@ -469,6 +529,7 @@ def test_persistence_failure_while_recording_a_failure_propagates(
         failing_deployment_service,  # type: ignore[arg-type]
         CampaignSpecBuilder(),
         registry,
+        connection_service,
         db_session,
     )
 
@@ -479,6 +540,7 @@ def test_persistence_failure_while_recording_a_failure_propagates(
 def test_next_provider_is_not_attempted_when_failure_persistence_fails(
     deployment_repository: CampaignDeploymentRepository,
     deployment_service: CampaignDeploymentService,
+    connection_service: ProviderConnectionService,
     db_session: Session,
 ) -> None:
     """publish_campaign's per-provider loop both prepares (create-if-
@@ -491,6 +553,7 @@ def test_next_provider_is_not_attempted_when_failure_persistence_fails(
     """
     tenant, user = _make_tenant_and_user(db_session, suffix="i")
     campaign = _make_complete_campaign(db_session, tenant, user)
+    _connect_supported_providers(connection_service, tenant_id=tenant.id)
     registry = FakeAdapterRegistry(
         {
             Provider.META: FakeFailureAdapter("meta declined"),
@@ -506,6 +569,7 @@ def test_next_provider_is_not_attempted_when_failure_persistence_fails(
         failing_deployment_service,  # type: ignore[arg-type]
         CampaignSpecBuilder(),
         registry,
+        connection_service,
         db_session,
     )
 
@@ -532,6 +596,7 @@ def test_next_provider_is_not_attempted_when_failure_persistence_fails(
 def test_non_pending_deployment_is_not_republished(
     deployment_repository: CampaignDeploymentRepository,
     deployment_service: CampaignDeploymentService,
+    connection_service: ProviderConnectionService,
     db_session: Session,
     target_status: CampaignDeploymentStatus,
 ) -> None:
@@ -542,6 +607,7 @@ def test_non_pending_deployment_is_not_republished(
     """
     tenant, user = _make_tenant_and_user(db_session, suffix=f"j-{target_status.value}")
     campaign = _make_complete_campaign(db_session, tenant, user)
+    _connect_supported_providers(connection_service, tenant_id=tenant.id)
 
     pending = deployment_service.create_pending_deployment(
         tenant_id=tenant.id,
@@ -576,7 +642,7 @@ def test_non_pending_deployment_is_not_republished(
         }
     )
     service = _make_publish_service(
-        deployment_repository, deployment_service, db_session, registry
+        deployment_repository, deployment_service, connection_service, db_session, registry
     )
 
     deployments = service.publish_campaign(tenant_id=tenant.id, campaign_id=campaign.id)

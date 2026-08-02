@@ -17,6 +17,7 @@ from app.adapters.meta_adapter import MetaAdapter
 from app.adapters.models import PublishResult
 from app.adapters.registry import ProviderAdapterRegistry
 from app.core.campaign_spec import CampaignBudget, CampaignSchedule, CampaignSpec
+from app.core.provider_credentials import ProviderCredentials
 from app.core.providers import Provider
 from app.models.campaign import CampaignBudgetType, CampaignObjective
 
@@ -83,8 +84,11 @@ def test_base_adapter_cannot_be_instantiated_directly() -> None:
 
 
 def test_meta_adapter_publish_raises_not_implemented() -> None:
+    credentials = ProviderCredentials(
+        provider=Provider.META, credential_payload=b"opaque"
+    )
     with pytest.raises(NotImplementedError):
-        MetaAdapter().publish(_make_spec(Provider.META))
+        MetaAdapter().publish(_make_spec(Provider.META), credentials)
 
 
 def test_meta_adapter_pause_raises_not_implemented() -> None:
@@ -98,8 +102,11 @@ def test_meta_adapter_resume_raises_not_implemented() -> None:
 
 
 def test_google_adapter_publish_raises_not_implemented() -> None:
+    credentials = ProviderCredentials(
+        provider=Provider.GOOGLE, credential_payload=b"opaque"
+    )
     with pytest.raises(NotImplementedError):
-        GoogleAdapter().publish(_make_spec(Provider.GOOGLE))
+        GoogleAdapter().publish(_make_spec(Provider.GOOGLE), credentials)
 
 
 def test_google_adapter_pause_raises_not_implemented() -> None:

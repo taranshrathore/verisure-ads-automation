@@ -1,35 +1,46 @@
 """Publish orchestration for CampaignDeployment preparation + adapter dispatch.
 
-MILESTONE 5 SCOPE: wires the Milestone 4 adapter layer
-(ProviderAdapterRegistry / BaseAdapter / PublishResult) into
-publish_campaign(). For every deployment that is still PENDING after
-the publish graph is prepared, this service builds a CampaignSpec,
-resolves that deployment's provider adapter, and calls
-adapter.publish(spec) -- then records the outcome via
-CampaignDeploymentService (mark_submitted on success, mark_failed on
-failure or on any unexpected exception from the adapter/spec-build
-step). There is still no real Meta/Google API call, no OAuth, no HTTP,
-no retries, no background jobs -- MetaAdapter/GoogleAdapter still raise
+Wires the adapter layer (ProviderAdapterRegistry / BaseAdapter /
+PublishResult) and ProviderConnectionService into publish_campaign().
+For every deployment that is still PENDING after the publish graph is
+prepared, this service builds a CampaignSpec, resolves that deployment's
+provider adapter, decrypts that tenant's connected provider credentials
+via ProviderConnectionService.get_decrypted_credentials(), wraps them in
+ProviderCredentials, and calls adapter.publish(spec, credentials) -- then
+records the outcome via CampaignDeploymentService (mark_submitted on
+success, mark_failed on failure or on any unexpected exception from the
+credential lookup / adapter / spec-build step).
+
+There is still no real Meta/Google API call, no OAuth, no HTTP, no
+retries, no background jobs -- MetaAdapter/GoogleAdapter still raise
 NotImplementedError (see app/adapters/meta_adapter.py and
 google_adapter.py), so in practice every PENDING deployment currently
-ends up FAILED with that message until a future milestone gives the
-adapters a real implementation.
+ends up FAILED with that message (or with a missing-connection /
+decryption-failure message) until a future milestone gives the adapters
+a real implementation.
+
+Missing ProviderConnection and credential decryption failures are treated
+the same as adapter exceptions: mark only that deployment FAILED and
+continue processing remaining providers.
 
 Deployments that were already past PENDING (submitted/live/paused/
 failed) when the graph was prepared are returned exactly as found --
 they are never re-published or reset by a later publish_campaign()
 call.
 
-MILESTONE 6 ADDITION: list_deployments() is a pure read alongside
-publish_campaign() -- it confirms the campaign belongs to the caller's
-tenant (the same rule publish_campaign() itself applies) and returns
-that campaign's existing deployments without creating, dispatching, or
-mutating anything. It lives here rather than on
-CampaignDeploymentService because it needs both CampaignRepository
-(ownership check) and CampaignDeploymentRepository (the actual list),
-which this service already composes -- adding it to
-CampaignDeploymentService would mean threading a CampaignRepository
-into a constructor that has no other reason to depend on it.
+list_deployments() is a pure read alongside publish_campaign() -- it
+confirms the campaign belongs to the caller's tenant (the same rule
+publish_campaign() itself applies) and returns that campaign's existing
+deployments without creating, dispatching, or mutating anything. It
+lives here rather than on CampaignDeploymentService because it needs
+both CampaignRepository (ownership check) and CampaignDeploymentRepository
+(the actual list), which this service already composes -- adding it to
+CampaignDeploymentService would mean threading a CampaignRepository into
+a constructor that has no other reason to depend on it.
+
+PublishCampaignService is the only place allowed to construct
+ProviderCredentials. Adapters never access repositories, sessions, env
+vars, or decryption.
 """
 
 import uuid
@@ -38,6 +49,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.registry import ProviderAdapterRegistry
 from app.core.exceptions import CampaignNotFoundError, InvalidCampaignStateError
+from app.core.provider_credentials import ProviderCredentials
 from app.core.providers import Provider
 from app.models.campaign import Campaign, CampaignStatus
 from app.models.campaign_deployment import CampaignDeployment, CampaignDeploymentStatus
@@ -47,6 +59,7 @@ from app.repositories.campaign_deployment_repository import (
 from app.repositories.campaign_repository import CampaignRepository
 from app.services.campaign_deployment_service import CampaignDeploymentService
 from app.services.campaign_spec_builder import CampaignSpecBuilder
+from app.services.provider_connection_service import ProviderConnectionService
 
 # The full set of providers a campaign is deployed to. There is no
 # per-campaign provider selection yet -- every campaign is prepared for
@@ -97,8 +110,9 @@ class PublishCampaignService:
     Composes CampaignRepository (read the campaign),
     CampaignDeploymentRepository (read existing deployments),
     CampaignDeploymentService (owns the commit for every deployment
-    lifecycle transition), CampaignSpecBuilder, and
-    ProviderAdapterRegistry (resolve a provider's adapter).
+    lifecycle transition), CampaignSpecBuilder, ProviderAdapterRegistry
+    (resolve a provider's adapter), and ProviderConnectionService
+    (decrypt credentials for adapter.publish).
     """
 
     def __init__(
@@ -108,6 +122,7 @@ class PublishCampaignService:
         deployment_service: CampaignDeploymentService,
         spec_builder: CampaignSpecBuilder,
         adapter_registry: ProviderAdapterRegistry,
+        connection_service: ProviderConnectionService,
         session: Session,
     ) -> None:
         self._campaigns = campaign_repository
@@ -115,6 +130,7 @@ class PublishCampaignService:
         self._deployment_service = deployment_service
         self._spec_builder = spec_builder
         self._adapter_registry = adapter_registry
+        self._connections = connection_service
         self._session = session
 
     def publish_campaign(
@@ -127,7 +143,8 @@ class PublishCampaignService:
         this tenant, or InvalidCampaignStateError if it is archived.
         Returns one CampaignDeployment per supported provider. A
         provider whose publish attempt raises for any reason (including
-        an incomplete campaign spec, an unknown provider, or the
+        an incomplete campaign spec, a missing provider connection, a
+        credential decryption failure, an unknown provider, or the
         adapter itself) never prevents the remaining providers from
         being attempted -- see _attempt_provider_publish.
         """
@@ -173,11 +190,12 @@ class PublishCampaignService:
     def _attempt_provider_publish(
         self, tenant_id: uuid.UUID, campaign: Campaign, deployment: CampaignDeployment
     ) -> CampaignDeployment:
-        """Build a spec, resolve deployment's provider adapter, call
-        adapter.publish(spec), and record the outcome.
+        """Build a spec, resolve credentials + adapter, call
+        adapter.publish(spec, credentials), and record the outcome.
 
         Exception boundary: only failures from the provider-facing
         sequence itself (CampaignSpecBuilder validation,
+        ProviderConnectionService.get_decrypted_credentials,
         ProviderAdapterRegistry.get raising ValueError for an unknown
         provider, or the adapter raising, expectedly or not -- including
         a PublishResult constructed with an invalid
@@ -200,11 +218,22 @@ class PublishCampaignService:
         proceeding to the next provider on top of a transaction that may
         not be trustworthy. So publish_campaign does NOT attempt the
         remaining providers in that case -- it stops and propagates.
+
+        Decrypted credential bytes never leave this method except inside
+        a ProviderCredentials value passed to adapter.publish.
         """
         try:
             spec = self._spec_builder.build(campaign, deployment)
             adapter = self._adapter_registry.get(deployment.provider)
-            result = adapter.publish(spec)
+            credential_payload = self._connections.get_decrypted_credentials(
+                tenant_id=tenant_id,
+                provider=deployment.provider,
+            )
+            credentials = ProviderCredentials(
+                provider=deployment.provider,
+                credential_payload=credential_payload,
+            )
+            result = adapter.publish(spec, credentials)
         except Exception as exc:
             return self._deployment_service.mark_failed(
                 tenant_id=tenant_id,

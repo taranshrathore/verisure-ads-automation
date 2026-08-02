@@ -27,16 +27,21 @@ Future implementation will need to:
 from app.adapters.base_adapter import BaseAdapter
 from app.adapters.models import PublishResult
 from app.core.campaign_spec import CampaignSpec
+from app.core.provider_credentials import ProviderCredentials
 
 
 class MetaAdapter(BaseAdapter):
     """Adapter for the Meta Marketing API. Not implemented yet."""
 
-    def publish(self, spec: CampaignSpec) -> PublishResult:
+    def publish(
+        self, spec: CampaignSpec, credentials: ProviderCredentials
+    ) -> PublishResult:
         """Create a campaign via the Meta Marketing API's Graph API.
 
         Not implemented: requires OAuth (see module docstring) and a
-        Graph API HTTP client, neither of which exist yet.
+        Graph API HTTP client, neither of which exist yet. credentials
+        is accepted so the publish seam matches BaseAdapter; this method
+        must not decrypt or fetch credentials itself.
         """
         raise NotImplementedError("MetaAdapter.publish is not implemented yet.")
 

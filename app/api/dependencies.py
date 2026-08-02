@@ -154,37 +154,6 @@ def get_provider_adapter_registry() -> ProviderAdapterRegistry:
     return ProviderAdapterRegistry()
 
 
-def get_publish_campaign_service(
-    db: Session = Depends(get_db),
-    campaign_repository: CampaignRepository = Depends(get_campaign_repository),
-    deployment_repository: CampaignDeploymentRepository = Depends(
-        get_campaign_deployment_repository
-    ),
-    deployment_service: CampaignDeploymentService = Depends(
-        get_campaign_deployment_service
-    ),
-    spec_builder: CampaignSpecBuilder = Depends(get_campaign_spec_builder),
-    adapter_registry: ProviderAdapterRegistry = Depends(get_provider_adapter_registry),
-) -> PublishCampaignService:
-    """Provide a freshly constructed PublishCampaignService for the current request.
-
-    Every dependency here is itself request-scoped (deployment_service
-    and campaign_repository/deployment_repository all resolve to the
-    same get_db session via FastAPI's per-request dependency caching),
-    so there is exactly one Session, one CampaignDeploymentService, and
-    one CampaignRepository/CampaignDeploymentRepository pair per
-    request -- no duplicate construction paths.
-    """
-    return PublishCampaignService(
-        campaign_repository,
-        deployment_repository,
-        deployment_service,
-        spec_builder,
-        adapter_registry,
-        db,
-    )
-
-
 def get_provider_connection_repository(
     db: Session = Depends(get_db),
 ) -> ProviderConnectionRepository:
@@ -221,6 +190,42 @@ def get_provider_connection_service(
     """
     return ProviderConnectionService(
         connection_repository, encryption_service, db
+    )
+
+
+def get_publish_campaign_service(
+    db: Session = Depends(get_db),
+    campaign_repository: CampaignRepository = Depends(get_campaign_repository),
+    deployment_repository: CampaignDeploymentRepository = Depends(
+        get_campaign_deployment_repository
+    ),
+    deployment_service: CampaignDeploymentService = Depends(
+        get_campaign_deployment_service
+    ),
+    spec_builder: CampaignSpecBuilder = Depends(get_campaign_spec_builder),
+    adapter_registry: ProviderAdapterRegistry = Depends(get_provider_adapter_registry),
+    connection_service: ProviderConnectionService = Depends(
+        get_provider_connection_service
+    ),
+) -> PublishCampaignService:
+    """Provide a freshly constructed PublishCampaignService for the current request.
+
+    Every dependency here is itself request-scoped (deployment_service,
+    connection_service, and campaign_repository/deployment_repository all
+    resolve to the same get_db session via FastAPI's per-request
+    dependency caching), so there is exactly one Session, one
+    CampaignDeploymentService, one ProviderConnectionService, and one
+    CampaignRepository/CampaignDeploymentRepository pair per request --
+    no duplicate construction paths.
+    """
+    return PublishCampaignService(
+        campaign_repository,
+        deployment_repository,
+        deployment_service,
+        spec_builder,
+        adapter_registry,
+        connection_service,
+        db,
     )
 
 
