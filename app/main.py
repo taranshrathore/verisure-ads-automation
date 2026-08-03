@@ -7,6 +7,7 @@ from app.api.v1 import auth, campaigns, provider_connections
 from app.core.exception_handlers import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.settings import settings
+from app.middleware.request_context import RequestContextMiddleware
 
 configure_logging()
 
@@ -27,6 +28,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Outermost: request_id + access log wrap the full stack (including CORS).
+app.add_middleware(RequestContextMiddleware)
 
 api_v1_router = APIRouter(prefix="/api/v1")
 api_v1_router.include_router(auth.router)

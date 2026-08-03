@@ -1,6 +1,7 @@
 """Application settings and environment configuration."""
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -40,6 +41,11 @@ class Settings(BaseSettings):
     # Must be >= 1: 0 busy-loops, and a negative value makes time.sleep raise
     # ValueError which run_forever would catch and immediately retry.
     publish_job_poll_interval_seconds: int = Field(default=5, ge=1)
+    # Observability Foundation Phase 1: stdlib logging only.
+    log_level: str = "INFO"
+    # None => text in development, json in production/staging/prod.
+    log_format: Literal["json", "text"] | None = None
+    log_service_name: str = "verisure"
 
 
 @lru_cache
