@@ -224,6 +224,20 @@ class CredentialDecryptionError(AppError):
         super().__init__(message)
 
 
+class PublishJobNotFoundError(AppError):
+    """Raised when a publish job cannot be found within the caller's
+    tenant and campaign.
+
+    Also used for cross-tenant lookups and for a job that exists under
+    the same tenant but a different campaign -- deliberately
+    indistinguishable from a genuinely missing job, matching
+    CampaignNotFoundError's existing pattern.
+    """
+
+    def __init__(self, message: str = "Publish job not found.") -> None:
+        super().__init__(message)
+
+
 # NOTE: The local RBAC exception hierarchy (AuthorizationError,
 # PermissionDeniedError, CrossTenantAccessError, RoleNotFoundError,
 # PermissionNotFoundError, RoleAssignmentConflictError, ProtectedRoleError,

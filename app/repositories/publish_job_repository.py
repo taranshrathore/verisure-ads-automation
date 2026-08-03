@@ -1,9 +1,8 @@
 """PublishJob persistence repository.
 
 ASYNC PUBLISH PHASE 2 SCOPE: data-access helpers only. Does not commit
-or roll back. No service, worker, or API wiring lives here -- claim_next
-and mark_finished exist so a later PublishJobService / worker can own
-transactions on top of these primitives.
+or roll back. PublishJobService (Phase 3) owns transactions on top of
+these primitives. No worker entrypoint or HTTP API wiring lives here.
 """
 
 from datetime import datetime

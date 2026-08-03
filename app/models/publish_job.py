@@ -2,11 +2,10 @@
 
 Model + migration landed in Async Publish Phase 1. Phase 2 adds
 PublishJobRepository (create/get/claim_next/mark_finished) for persistence
-access -- see app/repositories/publish_job_repository.py. No service,
-worker, or API exists yet; rows are not created or mutated by any
-application code path outside tests today. Later phases (enqueue, worker
-execution) build on this model and repository without altering Campaign
-or CampaignDeployment.
+access -- see app/repositories/publish_job_repository.py. Phase 3 adds
+PublishJobService (enqueue/get_job/run_once) which owns commits on top of
+that repository. No worker entrypoint or HTTP API exists yet; later
+phases wire those without altering Campaign or CampaignDeployment.
 """
 
 import uuid

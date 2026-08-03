@@ -15,6 +15,7 @@ from app.core.exceptions import (
     InvalidProviderConnectionStateError,
     ProviderConnectionAlreadyExistsError,
     ProviderConnectionNotFoundError,
+    PublishJobNotFoundError,
     TenantInactiveError,
     TenantNotFoundError,
     UserInactiveError,
@@ -161,3 +162,10 @@ def register_exception_handlers(app: FastAPI) -> None:
         app/core/exceptions.py) and never contains cryptographic material.
         """
         return _json_error(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc))
+
+    @app.exception_handler(PublishJobNotFoundError)
+    async def _handle_publish_job_not_found(
+        request: Request, exc: PublishJobNotFoundError
+    ) -> JSONResponse:
+        """Convert a PublishJobNotFoundError into a 404 response."""
+        return _json_error(status.HTTP_404_NOT_FOUND, str(exc))
