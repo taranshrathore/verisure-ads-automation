@@ -1,24 +1,15 @@
-"""API tests for campaign publish + deployment listing.
+"""API tests for async publish enqueue + job status + deployment listing.
 
-MILESTONE 6 SCOPE: this only tests the HTTP + dependency-injection
-wiring added on top of the already-built PublishCampaignService /
-CampaignDeploymentService -- no new domain logic is under test here
-(see test_publish_campaign_service.py and
-test_publish_campaign_adapter_integration.py for that). Every route
-enforces authentication only (Depends(get_current_user)); there is no
-local RBAC check -- matching the rest of app/api/v1/campaigns.py.
+HTTP wiring only: PublishJobService.enqueue / get_job and
+PublishCampaignService.list_deployments. Domain logic is covered
+elsewhere. Authentication only (no local RBAC).
 
-Real adapters (MetaAdapter/GoogleAdapter) still raise
-NotImplementedError -- see app/adapters/ -- so tests that exercise the
-real, unmodified ProviderAdapterRegistry expect every deployment to
-end up FAILED, not SUBMITTED/LIVE. One focused test injects a fake,
-always-successful adapter registry via a FastAPI dependency override
-(app.dependency_overrides), rather than monkeypatching internals, to
-verify the success-path response shape end to end.
+Enqueue does not run adapters in-request. Tests that need deployments
+after enqueue drive PublishJobService.run_once() on the test session.
 """
 
 from collections.abc import Iterator
-from uuid import UUID
+from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
@@ -27,10 +18,8 @@ from sqlalchemy.orm import Session
 
 from app.adapters.base_adapter import BaseAdapter
 from app.adapters.models import PublishResult
-from app.api.dependencies import (
-    get_credential_encryption_service,
-    get_provider_adapter_registry,
-)
+from app.adapters.registry import ProviderAdapterRegistry
+from app.api.dependencies import get_credential_encryption_service
 from app.core.campaign_spec import CampaignSpec
 from app.core.provider_credentials import ProviderCredentials
 from app.core.providers import Provider
@@ -39,16 +28,34 @@ from app.main import app
 from app.repositories.campaign_deployment_repository import (
     CampaignDeploymentRepository,
 )
+from app.repositories.campaign_repository import CampaignRepository
 from app.repositories.provider_connection_repository import (
     ProviderConnectionRepository,
 )
+from app.repositories.publish_job_repository import PublishJobRepository
 from app.services.campaign_deployment_service import CampaignDeploymentService
+from app.services.campaign_spec_builder import CampaignSpecBuilder
 from app.services.provider_connection_service import ProviderConnectionService
+from app.services.publish_campaign_service import PublishCampaignService
+from app.services.publish_job_service import PublishJobService
 
 _TEST_ENCRYPTION_KEY = Fernet.generate_key().decode("ascii")
 
 CAMPAIGNS_URL = "/api/v1/campaigns"
 _NIL_UUID = "00000000-0000-0000-0000-000000000000"
+_JOB_EXPECTED_KEYS = {
+    "id",
+    "tenant_id",
+    "campaign_id",
+    "requested_by_user_id",
+    "status",
+    "attempt_count",
+    "error_message",
+    "started_at",
+    "finished_at",
+    "created_at",
+    "updated_at",
+}
 
 
 @pytest.fixture
@@ -60,10 +67,7 @@ def encryption_service() -> CredentialEncryptionService:
 def _override_encryption_service(
     encryption_service: CredentialEncryptionService,
 ) -> Iterator[None]:
-    """PublishCampaignService now depends on ProviderConnectionService,
-    which constructs CredentialEncryptionService from ENCRYPTION_KEY.
-    Override so these API tests do not require a real key in .env.
-    """
+    """Override so API tests do not require ENCRYPTION_KEY in .env."""
     app.dependency_overrides[get_credential_encryption_service] = (
         lambda: encryption_service
     )
@@ -88,13 +92,6 @@ def _create_campaign(client: TestClient, token: str, **overrides: object) -> dic
 def _create_complete_campaign(
     client: TestClient, token: str, **overrides: object
 ) -> dict:
-    """A campaign with objective/budget/schedule all set, so
-    CampaignSpecBuilder.build succeeds and a real (or fake) adapter is
-    actually reached -- an incomplete campaign would instead fail
-    spec-building before any adapter is ever called, which would still
-    produce a FAILED deployment but for the wrong reason for these
-    tests' purposes.
-    """
     payload: dict[str, object] = {
         "objective": "conversions",
         "budget_type": "daily",
@@ -113,6 +110,13 @@ def _publish(client: TestClient, token: str, campaign_id: str):
     )
 
 
+def _get_job(client: TestClient, token: str, campaign_id: str, job_id: str):
+    return client.get(
+        f"{CAMPAIGNS_URL}/{campaign_id}/publish-jobs/{job_id}",
+        headers=_auth_headers(token),
+    )
+
+
 def _list_deployments(client: TestClient, token: str, campaign_id: str):
     return client.get(
         f"{CAMPAIGNS_URL}/{campaign_id}/deployments", headers=_auth_headers(token)
@@ -123,6 +127,39 @@ def _by_provider(items: list[dict], provider: str) -> dict:
     return next(item for item in items if item["provider"] == provider)
 
 
+def _process_one_job(
+    db_session: Session,
+    encryption_service: CredentialEncryptionService,
+    *,
+    adapter_registry: object | None = None,
+) -> bool:
+    """Drive one worker-equivalent iteration on the test session."""
+    deployment_repository = CampaignDeploymentRepository(db_session)
+    campaign_repository = CampaignRepository(db_session)
+    connection_repository = ProviderConnectionRepository(db_session)
+    job_repository = PublishJobRepository(db_session)
+    deployment_service = CampaignDeploymentService(deployment_repository, db_session)
+    connection_service = ProviderConnectionService(
+        connection_repository, encryption_service, db_session
+    )
+    publish_campaign_service = PublishCampaignService(
+        campaign_repository,
+        deployment_repository,
+        deployment_service,
+        CampaignSpecBuilder(),
+        adapter_registry or ProviderAdapterRegistry(),
+        connection_service,
+        db_session,
+    )
+    job_service = PublishJobService(
+        job_repository,
+        campaign_repository,
+        publish_campaign_service,
+        db_session,
+    )
+    return job_service.run_once()
+
+
 # --- Unauthenticated ---------------------------------------------------------
 
 
@@ -131,12 +168,17 @@ def test_publish_unauthenticated_returns_401(client: TestClient) -> None:
     assert response.status_code == 401
 
 
+def test_get_publish_job_unauthenticated_returns_401(client: TestClient) -> None:
+    response = client.get(f"{CAMPAIGNS_URL}/{_NIL_UUID}/publish-jobs/{_NIL_UUID}")
+    assert response.status_code == 401
+
+
 def test_list_deployments_unauthenticated_returns_401(client: TestClient) -> None:
     response = client.get(f"{CAMPAIGNS_URL}/{_NIL_UUID}/deployments")
     assert response.status_code == 401
 
 
-# --- Missing / cross-tenant campaign -----------------------------------------
+# --- Missing / cross-tenant / archived ---------------------------------------
 
 
 def test_publish_missing_campaign_returns_404(client: TestClient, auth_fixture) -> None:
@@ -172,9 +214,6 @@ def test_publish_cross_tenant_campaign_returns_404(
 def test_list_deployments_cross_tenant_returns_404(
     client: TestClient, auth_fixture
 ) -> None:
-    """Another tenant cannot list a campaign's deployments, even after
-    the owning tenant has published it.
-    """
     _, token_a = auth_fixture()
     _, token_b = auth_fixture()
     created = _create_complete_campaign(client, token_a)
@@ -185,48 +224,61 @@ def test_list_deployments_cross_tenant_returns_404(
     assert response.status_code == 404
 
 
-# --- Publish against the real (still-unimplemented) adapter stubs -----------
+def test_publish_archived_campaign_returns_409(
+    client: TestClient, auth_fixture
+) -> None:
+    _, token = auth_fixture()
+    created = _create_campaign(client, token)
+    archive = client.post(
+        f"{CAMPAIGNS_URL}/{created['id']}/archive", headers=_auth_headers(token)
+    )
+    assert archive.status_code == 200
+
+    response = _publish(client, token, created["id"])
+
+    assert response.status_code == 409
 
 
-def test_publish_creates_exactly_meta_and_google_deployments(
+# --- Enqueue -----------------------------------------------------------------
+
+
+def test_publish_enqueues_queued_job_with_202(
+    client: TestClient, auth_fixture
+) -> None:
+    user, token = auth_fixture()
+    created = _create_complete_campaign(client, token)
+
+    response = _publish(client, token, created["id"])
+
+    assert response.status_code == 202
+    body = response.json()
+    assert set(body.keys()) == {"job"}
+    assert "items" not in body
+    job = body["job"]
+    assert set(job.keys()) == _JOB_EXPECTED_KEYS
+    assert job["status"] == "queued"
+    assert job["campaign_id"] == created["id"]
+    assert job["tenant_id"] == str(user.tenant_id)
+    assert job["requested_by_user_id"] == str(user.id)
+    assert job["attempt_count"] == 0
+    assert job["error_message"] is None
+
+
+def test_publish_does_not_create_deployments_in_request(
     client: TestClient, auth_fixture
 ) -> None:
     _, token = auth_fixture()
     created = _create_complete_campaign(client, token)
 
-    response = _publish(client, token, created["id"])
+    publish = _publish(client, token, created["id"])
+    assert publish.status_code == 202
 
-    assert response.status_code == 200
-    items = response.json()["items"]
-    providers = {item["provider"] for item in items}
-    assert providers == {"meta", "google"}
-    assert len(items) == 2
-
-
-def test_publish_with_real_adapter_stubs_returns_failed_not_500(
-    client: TestClient, auth_fixture
-) -> None:
-    """MetaAdapter/GoogleAdapter still raise NotImplementedError -- the
-    endpoint must record that as a FAILED deployment and return 200,
-    never let it escape as an unhandled 500. Both providers must be
-    attempted (there are two failed items, one per provider), proving
-    Meta's failure never prevented Google from being attempted.
-    """
-    _, token = auth_fixture()
-    created = _create_complete_campaign(client, token)
-
-    response = _publish(client, token, created["id"])
-
-    assert response.status_code == 200
-    items = response.json()["items"]
-    assert len(items) == 2
-    for item in items:
-        assert item["status"] == "failed"
-        assert item["last_error_message"] is not None
-        assert item["external_campaign_id"] is None
+    listed = _list_deployments(client, token, created["id"])
+    assert listed.status_code == 200
+    assert listed.json()["items"] == []
 
 
-def test_repeated_publish_does_not_duplicate_deployments(
+def test_repeated_publish_returns_same_active_job(
     client: TestClient, auth_fixture
 ) -> None:
     _, token = auth_fixture()
@@ -235,66 +287,97 @@ def test_repeated_publish_does_not_duplicate_deployments(
     first = _publish(client, token, created["id"])
     second = _publish(client, token, created["id"])
 
-    assert first.status_code == 200
-    assert second.status_code == 200
-    first_ids = {item["id"] for item in first.json()["items"]}
-    second_ids = {item["id"] for item in second.json()["items"]}
-    assert first_ids == second_ids
-
-    listed = _list_deployments(client, token, created["id"])
-    assert len(listed.json()["items"]) == 2
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert first.json()["job"]["id"] == second.json()["job"]["id"]
+    assert second.json()["job"]["status"] == "queued"
 
 
-def test_existing_non_pending_deployment_is_reused_unchanged(
-    client: TestClient, auth_fixture, db_session: Session
-) -> None:
-    """A deployment already advanced past pending (e.g. submitted by a
-    prior successful publish) must come back unchanged from the
-    publish endpoint, not be silently reset or re-attempted.
-    """
-    user, token = auth_fixture()
+def test_get_publish_job_happy(client: TestClient, auth_fixture) -> None:
+    _, token = auth_fixture()
     created = _create_complete_campaign(client, token)
+    enqueued = _publish(client, token, created["id"])
+    job_id = enqueued.json()["job"]["id"]
 
-    deployment_service = CampaignDeploymentService(
-        CampaignDeploymentRepository(db_session), db_session
-    )
-    pending = deployment_service.create_pending_deployment(
-        tenant_id=user.tenant_id,
-        campaign_id=UUID(created["id"]),
-        provider=Provider.META,
-    )
-    submitted = deployment_service.mark_submitted(
-        tenant_id=user.tenant_id,
-        deployment_id=pending.id,
-        external_campaign_id="pre-existing-ext-id",
-    )
-
-    response = _publish(client, token, created["id"])
+    response = _get_job(client, token, created["id"], job_id)
 
     assert response.status_code == 200
-    meta = _by_provider(response.json()["items"], "meta")
-    assert meta["id"] == str(submitted.id)
-    assert meta["status"] == "submitted"
-    assert meta["external_campaign_id"] == "pre-existing-ext-id"
+    assert response.json()["job"]["id"] == job_id
+    assert response.json()["job"]["status"] == "queued"
 
 
-# --- Deployment listing -------------------------------------------------------
+def test_get_publish_job_wrong_tenant_returns_404(
+    client: TestClient, auth_fixture
+) -> None:
+    _, token_a = auth_fixture()
+    _, token_b = auth_fixture()
+    created = _create_complete_campaign(client, token_a)
+    job_id = _publish(client, token_a, created["id"]).json()["job"]["id"]
+
+    response = _get_job(client, token_b, created["id"], job_id)
+
+    assert response.status_code == 404
+
+
+def test_get_publish_job_wrong_campaign_returns_404(
+    client: TestClient, auth_fixture
+) -> None:
+    _, token = auth_fixture()
+    campaign_a = _create_complete_campaign(client, token)
+    campaign_b = _create_complete_campaign(client, token, name="Other campaign")
+    job_id = _publish(client, token, campaign_a["id"]).json()["job"]["id"]
+
+    response = _get_job(client, token, campaign_b["id"], job_id)
+
+    assert response.status_code == 404
+
+
+def test_get_publish_job_missing_returns_404(
+    client: TestClient, auth_fixture
+) -> None:
+    _, token = auth_fixture()
+    created = _create_complete_campaign(client, token)
+
+    response = _get_job(client, token, created["id"], str(uuid4()))
+
+    assert response.status_code == 404
+
+
+# --- Deployments after worker processes the job ------------------------------
+
+
+def test_worker_run_creates_failed_deployments_for_stub_adapters(
+    client: TestClient,
+    auth_fixture,
+    db_session: Session,
+    encryption_service: CredentialEncryptionService,
+) -> None:
+    _, token = auth_fixture()
+    created = _create_complete_campaign(client, token)
+    assert _publish(client, token, created["id"]).status_code == 202
+
+    assert _process_one_job(db_session, encryption_service) is True
+
+    listed = _list_deployments(client, token, created["id"])
+    assert listed.status_code == 200
+    items = listed.json()["items"]
+    assert len(items) == 2
+    assert {item["provider"] for item in items} == {"meta", "google"}
+    for item in items:
+        assert item["status"] == "failed"
+        assert item["last_error_message"] is not None
 
 
 def test_list_deployments_returns_deterministic_provider_order(
-    client: TestClient, auth_fixture
+    client: TestClient,
+    auth_fixture,
+    db_session: Session,
+    encryption_service: CredentialEncryptionService,
 ) -> None:
-    """The repository orders by created_at then id (see
-    CampaignDeploymentRepository.list_by_campaign) -- Meta and Google
-    are created in the same publish_campaign() call and can share an
-    identical created_at, so the id tie-breaker (not insertion order)
-    decides which comes first. The guarantee under test is therefore
-    that repeated listings return the exact same order, not that Meta
-    always precedes Google.
-    """
     _, token = auth_fixture()
     created = _create_complete_campaign(client, token)
     _publish(client, token, created["id"])
+    _process_one_job(db_session, encryption_service)
 
     first = _list_deployments(client, token, created["id"])
     second = _list_deployments(client, token, created["id"])
@@ -319,50 +402,10 @@ def test_list_deployments_before_publish_returns_empty_items(
     assert response.json()["items"] == []
 
 
-# --- Response schema ----------------------------------------------------------
-
-
-def test_publish_response_schema_has_expected_fields_and_no_idempotency_key(
-    client: TestClient, auth_fixture
-) -> None:
-    _, token = auth_fixture()
-    created = _create_complete_campaign(client, token)
-
-    response = _publish(client, token, created["id"])
-
-    assert response.status_code == 200
-    items = response.json()["items"]
-    assert len(items) == 2
-    expected_keys = {
-        "id",
-        "campaign_id",
-        "provider",
-        "status",
-        "external_campaign_id",
-        "submitted_at",
-        "confirmed_at",
-        "last_error_message",
-        "created_at",
-        "updated_at",
-    }
-    for item in items:
-        assert set(item.keys()) == expected_keys
-        assert "idempotency_key" not in item
-        assert item["campaign_id"] == created["id"]
-        assert item["provider"] in {"meta", "google"}
-
-
-# --- Fake-adapter success path (focused HTTP-level test) --------------------
+# --- Fake-adapter success path via worker ------------------------------------
 
 
 class _FakeSuccessAdapter(BaseAdapter):
-    """Always reports a successful publish with a fixed external ID.
-
-    A plain BaseAdapter subclass, exactly like the fakes in
-    test_publish_campaign_adapter_integration.py -- not a mock, not a
-    monkeypatch of MetaAdapter/GoogleAdapter.
-    """
-
     def __init__(self, external_campaign_id: str) -> None:
         self._external_campaign_id = external_campaign_id
 
@@ -384,11 +427,6 @@ class _FakeSuccessAdapter(BaseAdapter):
 
 
 class _FakeAdapterRegistry:
-    """Duck-typed stand-in for ProviderAdapterRegistry (get(provider) ->
-    BaseAdapter), injected only via app.dependency_overrides -- the real
-    ProviderAdapterRegistry class is never modified or subclassed.
-    """
-
     def __init__(self, adapters: dict[Provider, BaseAdapter]) -> None:
         self._adapters = adapters
 
@@ -396,28 +434,12 @@ class _FakeAdapterRegistry:
         return self._adapters[provider]
 
 
-@pytest.fixture
-def fake_success_registry() -> _FakeAdapterRegistry:
-    return _FakeAdapterRegistry(
-        {
-            Provider.META: _FakeSuccessAdapter("meta-ext-http-1"),
-            Provider.GOOGLE: _FakeSuccessAdapter("google-ext-http-1"),
-        }
-    )
-
-
-def test_publish_with_fake_success_adapter_returns_submitted_status(
+def test_worker_with_fake_success_adapter_marks_deployments_submitted(
     client: TestClient,
     auth_fixture,
     db_session: Session,
-    fake_success_registry: _FakeAdapterRegistry,
     encryption_service: CredentialEncryptionService,
 ) -> None:
-    """Focused test verifying the HTTP success-path response shape end
-    to end. get_provider_adapter_registry is overridden; provider
-    connections are seeded via the service layer (no connect API yet)
-    using the same encryption key the request path uses.
-    """
     user, token = auth_fixture()
     created = _create_complete_campaign(client, token)
     connection_service = ProviderConnectionService(
@@ -432,19 +454,33 @@ def test_publish_with_fake_success_adapter_returns_submitted_status(
             credential_payload=b"opaque-http-success-credential",
         )
 
-    app.dependency_overrides[get_provider_adapter_registry] = (
-        lambda: fake_success_registry
-    )
-    try:
-        response = _publish(client, token, created["id"])
-    finally:
-        app.dependency_overrides.pop(get_provider_adapter_registry, None)
+    enqueued = _publish(client, token, created["id"])
+    assert enqueued.status_code == 202
+    job_id = enqueued.json()["job"]["id"]
 
-    assert response.status_code == 200
-    items = response.json()["items"]
+    registry = _FakeAdapterRegistry(
+        {
+            Provider.META: _FakeSuccessAdapter("meta-ext-http-1"),
+            Provider.GOOGLE: _FakeSuccessAdapter("google-ext-http-1"),
+        }
+    )
+    assert (
+        _process_one_job(
+            db_session, encryption_service, adapter_registry=registry
+        )
+        is True
+    )
+
+    job = _get_job(client, token, created["id"], job_id)
+    assert job.status_code == 200
+    assert job.json()["job"]["status"] == "succeeded"
+
+    listed = _list_deployments(client, token, created["id"])
+    items = listed.json()["items"]
     meta = _by_provider(items, "meta")
     google = _by_provider(items, "google")
     assert meta["status"] == "submitted"
     assert meta["external_campaign_id"] == "meta-ext-http-1"
     assert google["status"] == "submitted"
     assert google["external_campaign_id"] == "google-ext-http-1"
+    assert "idempotency_key" not in meta

@@ -4,15 +4,11 @@ MILESTONE 1 SCOPE: draft creation/listing/retrieval/editing and
 draft-to-archived only -- see app/models/campaign.py and
 app/services/campaign_service.py. There is still no "ready" transition.
 
-MILESTONE 6 ADDITION: publish and deployment-listing endpoints wire the
-already-built PublishCampaignService/CampaignDeploymentService into
-HTTP (see app/services/publish_campaign_service.py). Real Meta/Google
-provider adapters still raise NotImplementedError (see app/adapters/),
-so today every publish attempt currently ends with FAILED deployments
-rather than SUBMITTED/LIVE ones -- this is expected until a future
-milestone gives the adapters a real implementation, not a bug in this
-wiring. No provider-specific branching exists in this router: both
-endpoints below only orchestrate through PublishCampaignService.
+ASYNC PUBLISH HTTP WIRING: POST /publish enqueues via PublishJobService
+(202 + job). GET /publish-jobs/{job_id} reads job status. GET
+/deployments still lists provider deployments via PublishCampaignService.
+Provider adapters may still raise NotImplementedError when a worker
+later runs the job -- that is expected until adapters are implemented.
 
 AUTHORIZATION STATE: every route below enforces authentication only
 (Depends(get_current_user)); there is no local RBAC/permission check.
@@ -36,13 +32,16 @@ from app.api.dependencies import (
     get_campaign_service,
     get_current_user,
     get_publish_campaign_service,
+    get_publish_job_service,
 )
 from app.core.providers import Provider
 from app.models.campaign import Campaign, CampaignBudgetType, CampaignObjective, CampaignStatus
 from app.models.campaign_deployment import CampaignDeployment, CampaignDeploymentStatus
+from app.models.publish_job import PublishJob, PublishJobStatus
 from app.models.user import User
 from app.services.campaign_service import CampaignService
 from app.services.publish_campaign_service import PublishCampaignService
+from app.services.publish_job_service import PublishJobService
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
@@ -171,12 +170,54 @@ class CampaignDeploymentRead(BaseModel):
 
 
 class CampaignDeploymentListResponse(BaseModel):
-    """Response body for POST /campaigns/{campaign_id}/publish and
-    GET /campaigns/{campaign_id}/deployments."""
+    """Response body for GET /campaigns/{campaign_id}/deployments."""
 
     model_config = ConfigDict(extra="forbid")
 
     items: list[CampaignDeploymentRead] = Field(default_factory=list)
+
+
+class PublishJobRead(BaseModel):
+    """Response body representing a single async publish job."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    tenant_id: UUID
+    campaign_id: UUID
+    requested_by_user_id: UUID | None
+    status: PublishJobStatus
+    attempt_count: int
+    error_message: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_model(cls, job: PublishJob) -> "PublishJobRead":
+        """Build a PublishJobRead from a PublishJob ORM instance."""
+        return cls(
+            id=job.id,
+            tenant_id=job.tenant_id,
+            campaign_id=job.campaign_id,
+            requested_by_user_id=job.requested_by_user_id,
+            status=job.status,
+            attempt_count=job.attempt_count,
+            error_message=job.error_message,
+            started_at=job.started_at,
+            finished_at=job.finished_at,
+            created_at=job.created_at,
+            updated_at=job.updated_at,
+        )
+
+
+class PublishJobResponse(BaseModel):
+    """Envelope for enqueue and job-status responses."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job: PublishJobRead
 
 
 @router.post(
@@ -301,29 +342,50 @@ def archive_campaign(
 
 @router.post(
     "/{campaign_id}/publish",
-    status_code=status.HTTP_200_OK,
-    response_model=CampaignDeploymentListResponse,
-    summary="Publish a campaign to every supported provider",
-    description="Ensure a deployment exists for every supported "
-    "provider (Meta, Google) and attempt to publish each one that is "
-    "still pending; a deployment already past pending is returned "
-    "unchanged rather than re-attempted. Real provider adapters are "
-    "not implemented yet, so a newly attempted deployment currently "
-    "ends up failed rather than submitted -- see app/adapters/. "
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=PublishJobResponse,
+    summary="Enqueue an async publish job for a campaign",
+    description="Enqueue a queued publish job for this campaign (or "
+    "return the existing active queued/running job). Does not run "
+    "provider adapters in-request -- a worker processes the job. "
     "Publishing an archived campaign returns 409.",
 )
 def publish_campaign(
     campaign_id: UUID,
     current_user: User = Depends(get_current_user),
-    publish_service: PublishCampaignService = Depends(get_publish_campaign_service),
-) -> CampaignDeploymentListResponse:
-    """Publish a campaign, returning the resulting deployment records."""
-    deployments = publish_service.publish_campaign(
-        tenant_id=current_user.tenant_id, campaign_id=campaign_id
+    publish_job_service: PublishJobService = Depends(get_publish_job_service),
+) -> PublishJobResponse:
+    """Enqueue a publish job and return it."""
+    job = publish_job_service.enqueue(
+        tenant_id=current_user.tenant_id,
+        campaign_id=campaign_id,
+        requested_by_user_id=current_user.id,
     )
-    return CampaignDeploymentListResponse(
-        items=[CampaignDeploymentRead.from_model(d) for d in deployments]
+    return PublishJobResponse(job=PublishJobRead.from_model(job))
+
+
+@router.get(
+    "/{campaign_id}/publish-jobs/{job_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=PublishJobResponse,
+    summary="Retrieve a publish job for a campaign",
+    description="Return one publish job scoped to the caller's tenant "
+    "and the given campaign. A job for another tenant or campaign is "
+    "indistinguishable from a missing one (404).",
+)
+def get_publish_job(
+    campaign_id: UUID,
+    job_id: UUID,
+    current_user: User = Depends(get_current_user),
+    publish_job_service: PublishJobService = Depends(get_publish_job_service),
+) -> PublishJobResponse:
+    """Return a tenant- and campaign-scoped publish job."""
+    job = publish_job_service.get_job(
+        tenant_id=current_user.tenant_id,
+        campaign_id=campaign_id,
+        job_id=job_id,
     )
+    return PublishJobResponse(job=PublishJobRead.from_model(job))
 
 
 @router.get(

@@ -47,6 +47,7 @@ from app.repositories.campaign_repository import CampaignRepository
 from app.repositories.provider_connection_repository import (
     ProviderConnectionRepository,
 )
+from app.repositories.publish_job_repository import PublishJobRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.tenant_repository import TenantRepository
 from app.repositories.user_repository import UserRepository
@@ -56,6 +57,7 @@ from app.services.campaign_service import CampaignService
 from app.services.campaign_spec_builder import CampaignSpecBuilder
 from app.services.provider_connection_service import ProviderConnectionService
 from app.services.publish_campaign_service import PublishCampaignService
+from app.services.publish_job_service import PublishJobService
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
 
@@ -225,6 +227,36 @@ def get_publish_campaign_service(
         spec_builder,
         adapter_registry,
         connection_service,
+        db,
+    )
+
+
+def get_publish_job_repository(
+    db: Session = Depends(get_db),
+) -> PublishJobRepository:
+    """Provide a PublishJobRepository bound to the request session."""
+    return PublishJobRepository(db)
+
+
+def get_publish_job_service(
+    db: Session = Depends(get_db),
+    job_repository: PublishJobRepository = Depends(get_publish_job_repository),
+    campaign_repository: CampaignRepository = Depends(get_campaign_repository),
+    publish_campaign_service: PublishCampaignService = Depends(
+        get_publish_campaign_service
+    ),
+) -> PublishJobService:
+    """Provide a freshly constructed PublishJobService for the current request.
+
+    Shares the request-scoped Session (and therefore the same
+    CampaignRepository / PublishCampaignService instances) via FastAPI's
+    per-request dependency caching -- matching the worker's graph shape
+    without a second construction path.
+    """
+    return PublishJobService(
+        job_repository,
+        campaign_repository,
+        publish_campaign_service,
         db,
     )
 
