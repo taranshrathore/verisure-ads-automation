@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +35,11 @@ class Settings(BaseSettings):
     # ones. None/blank means encryption is unavailable -- callers that need
     # it fail closed rather than falling back to plaintext.
     encryption_key: str | None = None
+    # Seconds the async publish worker sleeps when the queue is empty or
+    # after an unexpected exception (see app/orchestration/publish_worker.py).
+    # Must be >= 1: 0 busy-loops, and a negative value makes time.sleep raise
+    # ValueError which run_forever would catch and immediately retry.
+    publish_job_poll_interval_seconds: int = Field(default=5, ge=1)
 
 
 @lru_cache
