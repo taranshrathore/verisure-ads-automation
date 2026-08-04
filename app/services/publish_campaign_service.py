@@ -43,12 +43,14 @@ ProviderCredentials. Adapters never access repositories, sessions, env
 vars, or decryption.
 """
 
+import logging
 import uuid
 
 from sqlalchemy.orm import Session
 
 from app.adapters.registry import ProviderAdapterRegistry
 from app.core.exceptions import CampaignNotFoundError, InvalidCampaignStateError
+from app.core.logging_context import bound_context
 from app.core.provider_credentials import ProviderCredentials
 from app.core.providers import Provider
 from app.models.campaign import Campaign, CampaignStatus
@@ -75,6 +77,8 @@ _SUPPORTED_PROVIDERS: tuple[Provider, ...] = (
 _MAX_ERROR_MESSAGE_LENGTH = 2000
 _TRUNCATION_SUFFIX = "...[truncated]"
 _FALLBACK_ERROR_MESSAGE = "Adapter reported failure without a usable error message."
+
+logger = logging.getLogger("verisure.publish_campaign")
 
 
 def _safe_error_message(raw_message: str | None, *, exception_type: str | None = None) -> str:
@@ -154,6 +158,12 @@ class PublishCampaignService:
 
         self._validate_publishable(campaign)
 
+        with bound_context(
+            campaign_id=str(campaign.id),
+            tenant_id=str(tenant_id),
+        ):
+            logger.info("campaign_publish_started")
+
         deployments: list[CampaignDeployment] = []
         for provider in _SUPPORTED_PROVIDERS:
             deployment = self._deployments.get_by_campaign_and_provider(
@@ -165,7 +175,22 @@ class PublishCampaignService:
                 )
 
             if deployment.status == CampaignDeploymentStatus.PENDING:
-                deployment = self._attempt_provider_publish(tenant_id, campaign, deployment)
+                deployment = self._attempt_provider_publish(
+                    tenant_id, campaign, deployment
+                )
+                outcome = (
+                    "submitted"
+                    if deployment.status == CampaignDeploymentStatus.SUBMITTED
+                    else "failed"
+                )
+                with bound_context(
+                    provider=deployment.provider.value,
+                    deployment_id=str(deployment.id),
+                    campaign_id=str(campaign.id),
+                    tenant_id=str(tenant_id),
+                    status=outcome,
+                ):
+                    logger.info("provider_publish_finished")
 
             deployments.append(deployment)
 

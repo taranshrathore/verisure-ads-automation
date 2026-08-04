@@ -5,9 +5,16 @@ API, no worker entrypoint/polling loop. PublishJobService owns all
 transaction commits; PublishJobRepository never commits. The worker
 boundary later must call only this service (then PublishCampaignService),
 never routers or FastAPI Request objects.
+
+Observability: lifecycle logs only (enqueue/claim/succeed/fail). Business
+failures are logged once here; the worker must not re-log them as
+unexpected_worker_error (see consume_business_failure_logged).
 """
 
+import logging
+import time
 import uuid
+from contextvars import ContextVar
 from datetime import datetime, timezone
 
 from sqlalchemy.exc import IntegrityError
@@ -18,6 +25,7 @@ from app.core.exceptions import (
     InvalidCampaignStateError,
     PublishJobNotFoundError,
 )
+from app.core.logging_context import bind, bound_context, reset
 from app.models.campaign import CampaignStatus
 from app.models.publish_job import PublishJob, PublishJobStatus
 from app.repositories.campaign_repository import CampaignRepository
@@ -31,6 +39,23 @@ _UQ_ACTIVE_CAMPAIGN = "uq_publish_jobs_campaign_id_active"
 _MAX_ERROR_MESSAGE_LENGTH = 2000
 _TRUNCATION_SUFFIX = "...[truncated]"
 _FALLBACK_ERROR_MESSAGE = "Publish job failed without a usable error message."
+
+logger = logging.getLogger("verisure.publish_job")
+
+# Set when publish_job_failed has already been emitted for the current
+# run_once failure path so the worker does not also emit
+# unexpected_worker_error for the same business failure.
+_business_failure_logged: ContextVar[bool] = ContextVar(
+    "publish_job_business_failure_logged", default=False
+)
+
+
+def consume_business_failure_logged() -> bool:
+    """Return True once if PublishJobService already logged a job failure."""
+    if _business_failure_logged.get():
+        _business_failure_logged.set(False)
+        return True
+    return False
 
 
 def _safe_job_error_message(
@@ -48,6 +73,17 @@ def _safe_job_error_message(
 
     keep = _MAX_ERROR_MESSAGE_LENGTH - len(_TRUNCATION_SUFFIX)
     return message[:keep] + _TRUNCATION_SUFFIX
+
+
+def _log_enqueued(job: PublishJob) -> None:
+    with bound_context(
+        job_id=str(job.id),
+        tenant_id=str(job.tenant_id),
+        campaign_id=str(job.campaign_id),
+        status=job.status.value,
+        service="api",
+    ):
+        logger.info("publish_job_enqueued")
 
 
 class PublishJobService:
@@ -99,6 +135,7 @@ class PublishJobService:
                         "Active publish job tenant/campaign mismatch "
                         "from repository."
                     )
+                _log_enqueued(active)
                 return active
 
             job = PublishJob(
@@ -109,6 +146,7 @@ class PublishJobService:
             )
             self._jobs.create(job)
             self._session.commit()
+            _log_enqueued(job)
             return job
         except IntegrityError as exc:
             self._session.rollback()
@@ -125,6 +163,7 @@ class PublishJobService:
                             "Active publish job tenant/campaign mismatch "
                             "from repository."
                         ) from exc
+                    _log_enqueued(existing)
                     return existing
             raise
         except Exception:
@@ -163,44 +202,65 @@ class PublishJobService:
         if job is None:
             return False
 
+        started = time.perf_counter()
+        token = bind(
+            job_id=str(job.id),
+            tenant_id=str(job.tenant_id),
+            campaign_id=str(job.campaign_id),
+            attempt_count=job.attempt_count,
+            service="worker",
+        )
         try:
-            self._publish.publish_campaign(
-                tenant_id=job.tenant_id,
-                campaign_id=job.campaign_id,
-            )
-            finished_at = datetime.now(timezone.utc)
-            affected = self._jobs.mark_finished(
-                job.tenant_id,
-                job.id,
-                PublishJobStatus.RUNNING,
-                PublishJobStatus.SUCCEEDED,
-                finished_at,
-            )
-            if affected != 1:
-                raise RuntimeError(
-                    "Publish job could not be marked succeeded."
-                )
-            self._session.commit()
-            return True
-        except Exception as exc:
+            logger.info("publish_job_claimed")
             try:
-                finished_at = datetime.now(timezone.utc)
-                message = _safe_job_error_message(
-                    str(exc), exception_type=type(exc).__name__
+                self._publish.publish_campaign(
+                    tenant_id=job.tenant_id,
+                    campaign_id=job.campaign_id,
                 )
+                finished_at = datetime.now(timezone.utc)
                 affected = self._jobs.mark_finished(
                     job.tenant_id,
                     job.id,
                     PublishJobStatus.RUNNING,
-                    PublishJobStatus.FAILED,
+                    PublishJobStatus.SUCCEEDED,
                     finished_at,
-                    error_message=message,
                 )
                 if affected != 1:
+                    raise RuntimeError(
+                        "Publish job could not be marked succeeded."
+                    )
+                self._session.commit()
+                duration_ms = int((time.perf_counter() - started) * 1000)
+                with bound_context(duration_ms=duration_ms):
+                    logger.info("publish_job_succeeded")
+                return True
+            except Exception as exc:
+                message = _safe_job_error_message(
+                    str(exc), exception_type=type(exc).__name__
+                )
+                with bound_context(
+                    error_type=type(exc).__name__,
+                    error_message=message,
+                ):
+                    logger.info("publish_job_failed")
+                _business_failure_logged.set(True)
+                try:
+                    finished_at = datetime.now(timezone.utc)
+                    affected = self._jobs.mark_finished(
+                        job.tenant_id,
+                        job.id,
+                        PublishJobStatus.RUNNING,
+                        PublishJobStatus.FAILED,
+                        finished_at,
+                        error_message=message,
+                    )
+                    if affected != 1:
+                        self._session.rollback()
+                    else:
+                        self._session.commit()
+                except Exception:
                     self._session.rollback()
-                else:
-                    self._session.commit()
-            except Exception:
-                self._session.rollback()
+                    raise
                 raise
-            raise
+        finally:
+            reset(token)

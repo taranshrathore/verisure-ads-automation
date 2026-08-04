@@ -8,15 +8,22 @@ Constructs the normal repository/service graph directly against one
 SQLAlchemy Session per polling iteration. Never imports FastAPI, never
 touches routers/Request objects, and never calls HTTP APIs -- the worker
 boundary is PublishJobService.run_once() only.
+
+Observability: worker_started / worker_idle (DEBUG) /
+unexpected_worker_error only. Business publish failures are logged once
+inside PublishJobService and are not re-logged here.
 """
 
 from __future__ import annotations
 
+import logging
 import time
 
 from sqlalchemy.orm import Session
 
 from app.adapters.registry import ProviderAdapterRegistry
+from app.core.logging import configure_logging
+from app.core.logging_context import clear
 from app.core.security.credential_encryption import CredentialEncryptionService
 from app.core.settings import settings
 from app.database.session import SessionFactory
@@ -32,7 +39,12 @@ from app.services.campaign_deployment_service import CampaignDeploymentService
 from app.services.campaign_spec_builder import CampaignSpecBuilder
 from app.services.provider_connection_service import ProviderConnectionService
 from app.services.publish_campaign_service import PublishCampaignService
-from app.services.publish_job_service import PublishJobService
+from app.services.publish_job_service import (
+    PublishJobService,
+    consume_business_failure_logged,
+)
+
+logger = logging.getLogger("verisure.worker")
 
 
 def build_publish_job_service(session: Session) -> PublishJobService:
@@ -78,6 +90,7 @@ def run_once() -> bool:
         service = build_publish_job_service(session)
         return service.run_once()
     finally:
+        clear()
         session.close()
 
 
@@ -87,18 +100,23 @@ def run_forever() -> None:
     A single job failure must not terminate the worker. Session lifetime is
     owned by run_once() (one Session per iteration, always closed).
     """
+    logger.info("worker_started")
     interval = settings.publish_job_poll_interval_seconds
     while True:
         try:
             processed = run_once()
             if not processed:
+                logger.debug("worker_idle")
                 time.sleep(interval)
         except Exception:
+            if not consume_business_failure_logged():
+                logger.error("unexpected_worker_error", exc_info=True)
             time.sleep(interval)
 
 
 def main() -> None:
     """Module entry point for ``python -m app.orchestration.publish_worker``."""
+    configure_logging()
     run_forever()
 
 
