@@ -1,0 +1,176 @@
+# Backend CI — Production CI/CD Foundation (CI only; no deploy).
+name: Backend CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend checks
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: verisure_ci
+          POSTGRES_PASSWORD: verisure_ci
+          POSTGRES_DB: verisure_ci_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U verisure_ci -d verisure_ci_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Test-safe CI credentials only. Never production secrets.
+      APP_ENV: test
+      JWT_SECRET_KEY: ci-only-jwt-secret-not-for-production
+      DATABASE_URL: postgresql+psycopg://verisure_ci:verisure_ci@localhost:5432/verisure_ci_db
+      TEST_DATABASE_URL: postgresql+psycopg://verisure_ci:verisure_ci@localhost:5432/verisure_test_db
+      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: false
+
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.UV_CACHE_DIR }}
+            .venv
+          key: uv-${{ runner.os }}-py3.14-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            uv-${{ runner.os }}-py3.14-
+            uv-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Run pyflakes
+        run: uv run --with pyflakes pyflakes app
+
+      - name: Import FastAPI app
+        run: uv run python -c "from app.main import app"
+
+      - name: Configure SQLAlchemy mappers
+        run: >-
+          uv run python -c
+          "from sqlalchemy.orm import configure_mappers; configure_mappers(); print('mappers_ok')"
+
+      - name: Create dedicated test database
+        run: |
+          uv run python - <<'PY'
+          import psycopg
+
+          conn = psycopg.connect(
+              "postgresql://verisure_ci:verisure_ci@localhost:5432/verisure_ci_db",
+              autocommit=True,
+          )
+          try:
+              with conn.cursor() as cur:
+                  cur.execute(
+                      "SELECT 1 FROM pg_database WHERE datname = 'verisure_test_db'"
+                  )
+                  if cur.fetchone() is None:
+                      cur.execute("CREATE DATABASE verisure_test_db")
+                      print("created verisure_test_db")
+                  else:
+                      print("verisure_test_db already exists")
+          finally:
+              conn.close()
+          PY
+
+      - name: Apply Alembic migrations
+        run: |
+          uv run alembic upgrade head
+          # Pytest uses TEST_DATABASE_URL (must differ from DATABASE_URL).
+          DATABASE_URL="${TEST_DATABASE_URL}" uv run alembic upgrade head
+
+      - name: Run pytest
+        run: uv run pytest -q
+
+      - name: Alembic autogenerate drift check
+        run: |
+          set -euo pipefail
+          MARKER="ci_scratch_drift_check"
+          uv run alembic revision --autogenerate -m "${MARKER}"
+          mapfile -t FILES < <(ls alembic/versions/*"${MARKER}"*.py)
+          if [[ "${#FILES[@]}" -ne 1 ]]; then
+            echo "Expected exactly one scratch revision matching ${MARKER}, found: ${#FILES[@]}"
+            printf '%s\n' "${FILES[@]:-}"
+            exit 1
+          fi
+          SCRATCH="${FILES[0]}"
+          cleanup() {
+            rm -f "${SCRATCH}"
+            echo "Deleted scratch revision: ${SCRATCH}"
+          }
+          trap cleanup EXIT
+          uv run python - <<'PY'
+          import ast
+          import sys
+          from pathlib import Path
+
+          files = sorted(Path("alembic/versions").glob("*ci_scratch_drift_check*.py"))
+          if len(files) != 1:
+              print(f"Expected one scratch revision, found {len(files)}", file=sys.stderr)
+              sys.exit(1)
+          path = files[0]
+          tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+          def is_pass_only(func: ast.FunctionDef) -> bool:
+              body = list(func.body)
+              if body and isinstance(body[0], ast.Expr):
+                  value = body[0].value
+                  if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                      body = body[1:]
+              return len(body) == 1 and isinstance(body[0], ast.Pass)
+
+          failed = False
+          for name in ("upgrade", "downgrade"):
+              func = next(
+                  (
+                      node
+                      for node in tree.body
+                      if isinstance(node, ast.FunctionDef) and node.name == name
+                  ),
+                  None,
+              )
+              if func is None:
+                  print(f"{path}: missing {name}()", file=sys.stderr)
+                  failed = True
+                  continue
+              if not is_pass_only(func):
+                  print(
+                      f"{path}: {name}() is not pass-only (schema drift detected)",
+                      file=sys.stderr,
+                  )
+                  failed = True
+
+          if failed:
+              print(path.read_text(encoding="utf-8"), file=sys.stderr)
+              sys.exit(1)
+          print(f"No Alembic drift ({path.name} is pass-only)")
+          PY

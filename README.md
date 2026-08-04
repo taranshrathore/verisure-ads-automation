@@ -30,6 +30,14 @@ Current state:
   must be derived from the CRM-issued token/API, never from a client-sent
   field.
 
+## Continuous Integration
+
+Every push and pull request runs **Backend CI** on GitHub Actions (uv,
+PostgreSQL service container, pyflakes, mapper check, Alembic, pytest, and
+autogenerate drift detection). See [`docs/CI.md`](docs/CI.md) for the
+pipeline, local mirror commands, and troubleshooting. CI uses test-safe
+credentials only and does not deploy.
+
 ## Testing
 
 The pytest suite (`app/tests/`) runs against a **dedicated test database**,
