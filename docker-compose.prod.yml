@@ -1,0 +1,69 @@
+# Production-oriented compose: API + worker only (no bundled Postgres).
+# Provide DATABASE_URL and secrets via environment or an env file.
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up --build -d
+#
+# Migrations run once in the API container via docker/start.sh.
+
+name: verisure-ads-prod
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${VERISURE_IMAGE:-verisure-ads-automation:prod}
+    container_name: verisure-api
+    command: ["api"]
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-${SECRET_KEY}}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      PUBLISH_JOB_POLL_INTERVAL_SECONDS: ${PUBLISH_JOB_POLL_INTERVAL_SECONDS:-5}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    networks:
+      - verisure
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${VERISURE_IMAGE:-verisure-ads-automation:prod}
+    container_name: verisure-worker
+    command: ["worker"]
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-${SECRET_KEY}}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      PUBLISH_JOB_POLL_INTERVAL_SECONDS: ${PUBLISH_JOB_POLL_INTERVAL_SECONDS:-5}
+    networks:
+      - verisure
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  verisure:
+    driver: bridge

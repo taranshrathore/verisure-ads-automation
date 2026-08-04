@@ -1,0 +1,101 @@
+# Development stack: API + worker + PostgreSQL.
+# Usage: docker compose up --build
+#
+# Secrets come from the environment / .env file — never hardcode them here.
+# Application settings expect JWT_SECRET_KEY; SECRET_KEY from .env.example
+# is mapped for convenience.
+#
+# Inside the compose network the database hostname is `db`. Do not point
+# DATABASE_URL at localhost from these service definitions.
+
+name: verisure-ads
+
+services:
+  db:
+    image: postgres:17
+    container_name: verisure-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-verisure}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+      POSTGRES_DB: ${POSTGRES_DB:-verisure_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - verisure
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: verisure-api
+    command: ["api"]
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-verisure}:${POSTGRES_PASSWORD:-change_me}@db:5432/${POSTGRES_DB:-verisure_db}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-${SECRET_KEY:-dev-only-change-me}}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      PUBLISH_JOB_POLL_INTERVAL_SECONDS: ${PUBLISH_JOB_POLL_INTERVAL_SECONDS:-5}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    networks:
+      - verisure
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: verisure-worker
+    command: ["worker"]
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-verisure}:${POSTGRES_PASSWORD:-change_me}@db:5432/${POSTGRES_DB:-verisure_db}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-${SECRET_KEY:-dev-only-change-me}}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      PUBLISH_JOB_POLL_INTERVAL_SECONDS: ${PUBLISH_JOB_POLL_INTERVAL_SECONDS:-5}
+    networks:
+      - verisure
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  verisure:
+    driver: bridge
+
+volumes:
+  postgres_data:

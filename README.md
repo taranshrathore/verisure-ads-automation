@@ -38,6 +38,16 @@ autogenerate drift detection). See [`docs/CI.md`](docs/CI.md) for the
 pipeline, local mirror commands, and troubleshooting. CI uses test-safe
 credentials only and does not deploy.
 
+## Deployment
+
+Local and production-oriented Docker Compose (separate **API** and **worker**
+containers, multi-stage non-root image) are documented in
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+
+```bash
+docker compose up --build
+```
+
 ## Testing
 
 The pytest suite (`app/tests/`) runs against a **dedicated test database**,
@@ -47,7 +57,8 @@ refuses to start at all unless it is configured correctly (see
 
 ### 1. Create the test database
 
-Using the same PostgreSQL server started by `compose.yaml`:
+Using the same PostgreSQL server started by `docker compose`
+(`docker-compose.yml`):
 
 ```bash
 psql "postgresql://verisure:change_me@localhost:5432/verisure_db" -c "CREATE DATABASE verisure_test_db"
