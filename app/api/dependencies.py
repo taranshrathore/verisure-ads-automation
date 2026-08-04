@@ -55,6 +55,7 @@ from app.services.auth_service import AuthService
 from app.services.campaign_deployment_service import CampaignDeploymentService
 from app.services.campaign_service import CampaignService
 from app.services.campaign_spec_builder import CampaignSpecBuilder
+from app.services.health_service import HealthService
 from app.services.provider_connection_service import ProviderConnectionService
 from app.services.publish_campaign_service import PublishCampaignService
 from app.services.publish_job_service import PublishJobService
@@ -259,6 +260,16 @@ def get_publish_job_service(
         publish_campaign_service,
         db,
     )
+
+
+def get_health_service(db: Session = Depends(get_db)) -> HealthService:
+    """Provide a HealthService bound to the request session.
+
+    Used by readiness/database probes that need a lightweight query.
+    Liveness and worker endpoints construct HealthService without a
+    session and must not depend on this provider.
+    """
+    return HealthService(session=db)
 
 
 def _unauthorized(detail: str) -> HTTPException:
