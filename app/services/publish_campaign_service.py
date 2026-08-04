@@ -52,6 +52,10 @@ from app.adapters.registry import ProviderAdapterRegistry
 from app.core.exceptions import CampaignNotFoundError, InvalidCampaignStateError
 from app.core.logging_context import bound_context
 from app.core.provider_credentials import ProviderCredentials
+from app.core.provider_error_sanitization import (
+    sanitize_provider_exception,
+    sanitize_provider_message,
+)
 from app.core.providers import Provider
 from app.models.campaign import Campaign, CampaignStatus
 from app.models.campaign_deployment import CampaignDeployment, CampaignDeploymentStatus
@@ -71,41 +75,7 @@ _SUPPORTED_PROVIDERS: tuple[Provider, ...] = (
     Provider.GOOGLE,
 )
 
-# Must not exceed CampaignDeployment.last_error_message's column width
-# (String(2000) -- see app/models/campaign_deployment.py). If that
-# column's length ever changes, this must change with it.
-_MAX_ERROR_MESSAGE_LENGTH = 2000
-_TRUNCATION_SUFFIX = "...[truncated]"
-_FALLBACK_ERROR_MESSAGE = "Adapter reported failure without a usable error message."
-
 logger = logging.getLogger("verisure.publish_campaign")
-
-
-def _safe_error_message(raw_message: str | None, *, exception_type: str | None = None) -> str:
-    """Turn an arbitrary provider/adapter-supplied string into a bounded,
-    non-empty, database-safe error message.
-
-    This is a minimal, provider-agnostic sanitization boundary -- there
-    are no real adapters yet (MetaAdapter/GoogleAdapter both still raise
-    NotImplementedError), so there is nothing provider-specific to
-    redact (e.g. stripping a token out of a Graph API error body). Only
-    the two structural risks any future adapter could hit are guarded
-    against here: an empty/blank message, and a message longer than
-    last_error_message's column width. Provider-specific redaction
-    rules are deliberately deferred to whichever future milestone gives
-    adapters a real HTTP implementation.
-    """
-    message = (raw_message or "").strip()
-    if not message:
-        message = _FALLBACK_ERROR_MESSAGE
-        if exception_type:
-            message = f"{message} ({exception_type})"
-
-    if len(message) <= _MAX_ERROR_MESSAGE_LENGTH:
-        return message
-
-    keep = _MAX_ERROR_MESSAGE_LENGTH - len(_TRUNCATION_SUFFIX)
-    return message[:keep] + _TRUNCATION_SUFFIX
 
 
 class PublishCampaignService:
@@ -280,9 +250,7 @@ class PublishCampaignService:
             return self._deployment_service.mark_failed(
                 tenant_id=tenant_id,
                 deployment_id=deployment.id,
-                last_error_message=_safe_error_message(
-                    str(exc), exception_type=type(exc).__name__
-                ),
+                last_error_message=sanitize_provider_exception(exc),
                 commit=commit,
             )
 
@@ -297,7 +265,7 @@ class PublishCampaignService:
         return self._deployment_service.mark_failed(
             tenant_id=tenant_id,
             deployment_id=deployment.id,
-            last_error_message=_safe_error_message(result.error_message),
+            last_error_message=sanitize_provider_message(result.error_message),
             commit=commit,
         )
 

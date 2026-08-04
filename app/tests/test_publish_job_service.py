@@ -15,17 +15,19 @@ from app.core.exceptions import (
     InvalidCampaignStateError,
     PublishJobNotFoundError,
 )
+from app.core.provider_error_sanitization import (
+    PROVIDER_REQUEST_FAILED,
+    UNEXPECTED_PROVIDER_ERROR,
+    sanitize_provider_exception,
+    sanitize_provider_message,
+)
 from app.models.campaign import Campaign, CampaignStatus
 from app.models.publish_job import PublishJob, PublishJobStatus
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.repositories.campaign_repository import CampaignRepository
 from app.repositories.publish_job_repository import PublishJobRepository
-from app.services.publish_job_service import (
-    PublishJobService,
-    _MAX_ERROR_MESSAGE_LENGTH,
-    _safe_job_error_message,
-)
+from app.services.publish_job_service import PublishJobService
 
 
 class FakePublishCampaignService:
@@ -362,7 +364,8 @@ def test_run_once_publish_exception_marks_failed(db_session: Session) -> None:
     assert loaded.finished_at is not None
     assert loaded.attempt_count == 1
     assert loaded.error_message is not None
-    assert "adapter exploded" in loaded.error_message
+    assert loaded.error_message == PROVIDER_REQUEST_FAILED
+    assert "adapter exploded" not in loaded.error_message
 
 
 def test_unexpected_persistence_failure_rolls_back(db_session: Session) -> None:
@@ -479,21 +482,18 @@ def test_get_job_sees_committed_terminal_status_after_run_once(
     assert loaded.finished_at is not None
 
 
-# --- error-message helper ----------------------------------------------------
+# --- error-message sanitization ----------------------------------------------
 
 
-def test_safe_error_truncation() -> None:
+def test_provider_error_sanitization_never_returns_raw_text() -> None:
     huge = "x" * 5000
-    message = _safe_job_error_message(huge)
-    assert len(message) == _MAX_ERROR_MESSAGE_LENGTH
-    assert message.endswith("...[truncated]")
+    message = sanitize_provider_message(huge)
+    assert message == PROVIDER_REQUEST_FAILED
+    assert huge not in message
 
-
-def test_blank_error_fallback() -> None:
-    message = _safe_job_error_message("", exception_type="RuntimeError")
-    assert message.strip() != ""
-    assert "RuntimeError" in message
-    assert "usable error message" in message
+    message = sanitize_provider_exception(RuntimeError(""))
+    assert message == UNEXPECTED_PROVIDER_ERROR
+    assert "RuntimeError" not in message
 
 
 # --- session / transaction ownership -----------------------------------------

@@ -342,7 +342,8 @@ def test_missing_provider_connection_marks_deployment_failed(
     for deployment in deployments:
         assert deployment.status == CampaignDeploymentStatus.FAILED
         assert deployment.last_error_message is not None
-        assert "not found" in deployment.last_error_message.lower()
+        assert deployment.last_error_message == "Authentication with provider failed."
+        assert "not found" not in deployment.last_error_message.lower()
     assert meta_adapter.received_credentials == []
     assert google_adapter.received_credentials == []
 

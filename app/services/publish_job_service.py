@@ -27,6 +27,7 @@ from app.core.exceptions import (
     PublishJobNotFoundError,
 )
 from app.core.logging_context import bind, bound_context, reset
+from app.core.provider_error_sanitization import sanitize_provider_exception
 from app.core.settings import settings
 from app.models.campaign import CampaignStatus
 from app.models.publish_job import PublishJob, PublishJobStatus
@@ -36,11 +37,6 @@ from app.services.publish_campaign_service import PublishCampaignService
 
 # Matches the partial unique index created by migration b7e4a91c2d08.
 _UQ_ACTIVE_CAMPAIGN = "uq_publish_jobs_campaign_id_active"
-
-# Must not exceed PublishJob.error_message's column width (String(2000)).
-_MAX_ERROR_MESSAGE_LENGTH = 2000
-_TRUNCATION_SUFFIX = "...[truncated]"
-_FALLBACK_ERROR_MESSAGE = "Publish job failed without a usable error message."
 
 logger = logging.getLogger("verisure.publish_job")
 
@@ -58,23 +54,6 @@ def consume_business_failure_logged() -> bool:
         _business_failure_logged.set(False)
         return True
     return False
-
-
-def _safe_job_error_message(
-    raw_message: str | None, *, exception_type: str | None = None
-) -> str:
-    """Turn an arbitrary exception string into a bounded, non-empty message."""
-    message = (raw_message or "").strip()
-    if not message:
-        message = _FALLBACK_ERROR_MESSAGE
-        if exception_type:
-            message = f"{message} ({exception_type})"
-
-    if len(message) <= _MAX_ERROR_MESSAGE_LENGTH:
-        return message
-
-    keep = _MAX_ERROR_MESSAGE_LENGTH - len(_TRUNCATION_SUFFIX)
-    return message[:keep] + _TRUNCATION_SUFFIX
 
 
 def _log_enqueued(job: PublishJob) -> None:
@@ -253,12 +232,9 @@ class PublishJobService:
                     logger.info("publish_job_succeeded")
                 return True
             except Exception as exc:
-                message = _safe_job_error_message(
-                    str(exc), exception_type=type(exc).__name__
-                )
+                message = sanitize_provider_exception(exc)
                 with bound_context(
                     error_type=type(exc).__name__,
-                    error_message=message,
                 ):
                     logger.info("publish_job_failed")
                 _business_failure_logged.set(True)

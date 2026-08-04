@@ -309,7 +309,7 @@ def test_one_provider_succeeds_and_one_fails(
     meta = _by_provider(deployments, Provider.META)
     google = _by_provider(deployments, Provider.GOOGLE)
     assert meta.status == CampaignDeploymentStatus.FAILED
-    assert meta.last_error_message == "meta rejected the budget"
+    assert meta.last_error_message == "Provider request failed."
     assert meta.external_campaign_id is None
     assert google.status == CampaignDeploymentStatus.SUBMITTED
     assert google.external_campaign_id == "google-ext-2"
@@ -342,7 +342,7 @@ def test_adapter_exception_is_caught_and_marks_deployment_failed(
 
     meta = _by_provider(deployments, Provider.META)
     assert meta.status == CampaignDeploymentStatus.FAILED
-    assert meta.last_error_message == "simulated adapter crash"
+    assert meta.last_error_message == "Provider request failed."
 
 
 def test_google_is_still_attempted_when_meta_adapter_raises(
@@ -442,18 +442,18 @@ def test_blank_exception_message_gets_a_safe_fallback(
     assert meta.status == CampaignDeploymentStatus.FAILED
     assert meta.last_error_message is not None
     assert meta.last_error_message.strip() != ""
-    assert "RuntimeError" in meta.last_error_message
+    assert meta.last_error_message == "Unexpected provider error."
+    assert "RuntimeError" not in meta.last_error_message
 
 
-def test_overly_long_error_message_is_truncated_to_column_width(
+def test_overly_long_error_message_is_sanitized_not_persisted_raw(
     deployment_repository: CampaignDeploymentRepository,
     deployment_service: CampaignDeploymentService,
     connection_service: ProviderConnectionService,
     db_session: Session,
 ) -> None:
-    """last_error_message is String(2000) -- see
-    app/models/campaign_deployment.py -- so a longer message must be
-    truncated rather than causing a database error.
+    """Opaque provider text is replaced with a short safe message -- never
+    persisted raw, even when thousands of characters long.
     """
     tenant, user = _make_tenant_and_user(db_session, suffix="g")
     campaign = _make_complete_campaign(db_session, tenant, user)
@@ -475,7 +475,9 @@ def test_overly_long_error_message_is_truncated_to_column_width(
     assert meta.status == CampaignDeploymentStatus.FAILED
     assert meta.last_error_message is not None
     assert len(meta.last_error_message) <= 2000
-    assert meta.last_error_message.endswith("...[truncated]")
+    assert meta.last_error_message == "Provider request failed."
+    assert huge_message not in meta.last_error_message
+    assert not meta.last_error_message.endswith("...[truncated]")
 
 
 # --- Persistence failures must propagate, not be swallowed ---------------------
