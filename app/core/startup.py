@@ -50,6 +50,8 @@ def validate_startup_config(cfg: Settings | None = None) -> Settings:
     _validate_log_level(resolved)
     _validate_log_format(resolved)
     _validate_publish_intervals(resolved)
+    _validate_cors(resolved)
+    _validate_docs(resolved)
     return resolved
 
 
@@ -117,4 +119,37 @@ def _validate_publish_intervals(cfg: Settings) -> None:
     if cfg.publish_job_stale_after_seconds < 1:
         raise ConfigurationError(
             "PUBLISH_JOB_STALE_AFTER_SECONDS must be >= 1."
+        )
+
+
+def _validate_cors(cfg: Settings) -> None:
+    origins = cfg.cors_origin_list()
+    if "*" in origins:
+        if len(origins) != 1:
+            raise ConfigurationError(
+                "CORS_ALLOW_ORIGINS wildcard '*' must be the sole origin."
+            )
+        if cfg.cors_allow_credentials:
+            raise ConfigurationError(
+                "CORS_ALLOW_ORIGINS=['*'] cannot be combined with "
+                "CORS_ALLOW_CREDENTIALS=true."
+            )
+        if cfg.app_env == "production":
+            raise ConfigurationError(
+                "Production CORS_ALLOW_ORIGINS must be an explicit allowlist; "
+                "wildcard '*' is not allowed."
+            )
+        return
+
+    if cfg.app_env == "production" and not origins:
+        raise ConfigurationError(
+            "Production CORS_ALLOW_ORIGINS must be a non-empty explicit "
+            "allowlist."
+        )
+
+
+def _validate_docs(cfg: Settings) -> None:
+    if cfg.app_env == "production" and cfg.docs_enabled is True:
+        raise ConfigurationError(
+            "DOCS_ENABLED cannot be true in production."
         )

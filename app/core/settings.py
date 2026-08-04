@@ -51,6 +51,34 @@ class Settings(BaseSettings):
     # Explicit format only; startup validation rejects any other value.
     log_format: Literal["json", "text"] = "text"
     log_service_name: str = "verisure"
+    # Comma-separated CORS origins. "*" alone is allowed only outside
+    # production, and never together with cors_allow_credentials=True.
+    # Production requires an explicit non-empty allowlist (no wildcard).
+    cors_allow_origins: str = "*"
+    cors_allow_credentials: bool = False
+    # None => enabled in development/testing, disabled in production.
+    # True is rejected in production (fail-fast; no silent override).
+    docs_enabled: bool | None = None
+
+    def cors_origin_list(self) -> list[str]:
+        """Return stripped CORS origins from the comma-separated setting."""
+        return [
+            part.strip()
+            for part in self.cors_allow_origins.split(",")
+            if part.strip()
+        ]
+
+    def resolve_docs_enabled(self) -> bool:
+        """Resolve whether OpenAPI docs endpoints should be mounted.
+
+        Must be called only after validate_startup_config() has accepted
+        the settings (production + docs_enabled=True is rejected there).
+        """
+        if self.app_env == "production":
+            return False
+        if self.docs_enabled is None:
+            return True
+        return self.docs_enabled
 
 
 @lru_cache

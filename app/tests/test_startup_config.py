@@ -185,11 +185,12 @@ def test_create_application_invokes_shared_validate(
     import app.main as main_mod
 
     calls: list[str] = []
+    cfg = _valid_settings()
 
-    def _validate(cfg: Settings | None = None) -> Settings:
-        del cfg
+    def _validate(incoming: Settings | None = None) -> Settings:
+        del incoming
         calls.append("validate")
-        return _valid_settings()
+        return cfg
 
     monkeypatch.setattr(main_mod, "validate_startup_config", _validate)
     monkeypatch.setattr(main_mod, "configure_logging", lambda: None)
@@ -199,4 +200,4 @@ def test_create_application_invokes_shared_validate(
 
     application = main_mod.create_application()
     assert calls == ["validate"]
-    assert application.title == main_mod.settings.app_name
+    assert application.title == cfg.app_name
