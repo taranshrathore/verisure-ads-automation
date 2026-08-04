@@ -44,7 +44,7 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-verisure}:${POSTGRES_PASSWORD:-change_me}@db:5432/${POSTGRES_DB:-verisure_db}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-${SECRET_KEY:-dev-only-change-me}}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-${SECRET_KEY:-dev-only-change-me-not-for-production}}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-text}
@@ -79,7 +79,7 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-verisure}:${POSTGRES_PASSWORD:-change_me}@db:5432/${POSTGRES_DB:-verisure_db}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-${SECRET_KEY:-dev-only-change-me}}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-${SECRET_KEY:-dev-only-change-me-not-for-production}}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-text}

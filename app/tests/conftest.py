@@ -29,9 +29,18 @@ removed -- see docs/HANDOFF.md. auth_fixture below only creates a
 tenant + user + bearer token; it carries no role or permission data.
 """
 
+import os
 import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
+
+# Process-env bootstrap for the test harness ONLY. Must run before any
+# app import so Settings / create_application() see a usable ENCRYPTION_KEY.
+# This is not an application silent fallback: API/worker startup still
+# fail closed via validate_startup_config() when ENCRYPTION_KEY is unset.
+_TEST_ONLY_FERNET_KEY = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+if not os.environ.get("ENCRYPTION_KEY", "").strip():
+    os.environ["ENCRYPTION_KEY"] = _TEST_ONLY_FERNET_KEY
 
 import pytest
 from fastapi.testclient import TestClient

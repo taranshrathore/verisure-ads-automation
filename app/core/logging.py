@@ -22,13 +22,8 @@ logger = logging.getLogger("verisure")
 
 
 def _resolve_log_format() -> str:
-    """Return 'json' or 'text' from settings, with env-based default."""
-    if settings.log_format is not None:
-        return settings.log_format
-    env = (settings.app_env or "").strip().lower()
-    if env in {"production", "prod", "staging"}:
-        return "json"
-    return "text"
+    """Return the configured log format ('json' or 'text')."""
+    return settings.log_format
 
 
 def _resolve_log_level() -> int:

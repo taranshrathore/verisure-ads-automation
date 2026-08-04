@@ -33,11 +33,13 @@ jobs:
           --health-retries 10
 
     env:
-      # Test-safe CI credentials only. Never production secrets.
-      APP_ENV: test
+      APP_ENV: testing
       JWT_SECRET_KEY: ci-only-jwt-secret-not-for-production
+      ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
       DATABASE_URL: postgresql+psycopg://verisure_ci:verisure_ci@localhost:5432/verisure_ci_db
       TEST_DATABASE_URL: postgresql+psycopg://verisure_ci:verisure_ci@localhost:5432/verisure_test_db
+      LOG_LEVEL: INFO
+      LOG_FORMAT: text
       UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
 
     steps:

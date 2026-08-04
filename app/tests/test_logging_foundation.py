@@ -158,19 +158,6 @@ def test_configure_logging_text_format(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(handler.formatter, TextLogFormatter)
 
 
-def test_configure_logging_defaults_json_in_production(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(logging_module.settings, "log_format", None)
-    monkeypatch.setattr(logging_module.settings, "app_env", "production")
-    configure_logging()
-    root = logging.getLogger()
-    handler = next(
-        h for h in root.handlers if h.get_name() == "verisure-observability"
-    )
-    assert isinstance(handler.formatter, JsonLogFormatter)
-
-
 def test_log_format_setting_rejects_invalid_value() -> None:
     from pydantic import ValidationError
 

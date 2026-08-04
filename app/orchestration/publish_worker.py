@@ -26,6 +26,7 @@ from app.core.logging import configure_logging
 from app.core.logging_context import clear
 from app.core.security.credential_encryption import CredentialEncryptionService
 from app.core.settings import settings
+from app.core.startup import validate_startup_config
 from app.database.session import SessionFactory
 from app.repositories.campaign_deployment_repository import (
     CampaignDeploymentRepository,
@@ -116,6 +117,7 @@ def run_forever() -> None:
 
 def main() -> None:
     """Module entry point for ``python -m app.orchestration.publish_worker``."""
+    validate_startup_config()
     configure_logging()
     run_forever()
 

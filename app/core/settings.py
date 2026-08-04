@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "VeriSure Ad Automation"
-    app_env: str = "development"
+    app_env: Literal["development", "testing", "production"] = "development"
     debug: bool = True
     api_version: str = "v1"
     database_url: str | None = None
@@ -34,7 +34,8 @@ class Settings(BaseSettings):
     # every listed key can decrypt, so rotation is: prepend a new key, keep
     # old keys until nothing on disk still needs them, then drop the old
     # ones. None/blank means encryption is unavailable -- callers that need
-    # it fail closed rather than falling back to plaintext.
+    # it fail closed rather than falling back to plaintext. Process startup
+    # requires a valid key via validate_startup_config().
     encryption_key: str | None = None
     # Seconds the async publish worker sleeps when the queue is empty or
     # after an unexpected exception (see app/orchestration/publish_worker.py).
@@ -47,8 +48,8 @@ class Settings(BaseSettings):
     publish_job_stale_after_seconds: int = Field(default=900, ge=1)
     # Observability Foundation Phase 1: stdlib logging only.
     log_level: str = "INFO"
-    # None => text in development, json in production/staging/prod.
-    log_format: Literal["json", "text"] | None = None
+    # Explicit format only; startup validation rejects any other value.
+    log_format: Literal["json", "text"] = "text"
     log_service_name: str = "verisure"
 
 
