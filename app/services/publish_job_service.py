@@ -16,7 +16,7 @@ import logging
 import time
 import uuid
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -27,6 +27,7 @@ from app.core.exceptions import (
     PublishJobNotFoundError,
 )
 from app.core.logging_context import bind, bound_context, reset
+from app.core.settings import settings
 from app.models.campaign import CampaignStatus
 from app.models.publish_job import PublishJob, PublishJobStatus
 from app.repositories.campaign_repository import CampaignRepository
@@ -185,31 +186,35 @@ class PublishJobService:
         return job
 
     def run_once(self) -> bool:
-        """Claim one queued job, run publish, and mark the job terminal.
+        """Claim one job (queued, or stale RUNNING), publish, mark terminal.
 
-        Single unit of work for the worker path: claim, publish
+        Single unit of work for the worker path: claim/reclaim, publish
         (deployments flush-only), and terminal job mark share one outer
         transaction. A savepoint wraps publish + success mark so a
         failure rolls back deployment work while leaving the claim in
         the outer transaction long enough to mark the job FAILED, then
         one commit (or a full rollback if that also fails).
 
-        Returns False when the queue is empty. Returns True after a
+        Returns False when nothing is claimable. Returns True after a
         successful publish + SUCCEEDED transition. When publish (or the
         success mark) fails, marks the job FAILED (when still RUNNING),
         commits that failure when possible, and re-raises -- never
         swallowing the original exception.
         """
         now = datetime.now(timezone.utc)
+        stale_before = now - timedelta(
+            seconds=settings.publish_job_stale_after_seconds
+        )
         try:
-            job = self._jobs.claim_next(now)
+            claimed = self._jobs.claim_next(now, stale_before=stale_before)
         except Exception:
             self._session.rollback()
             raise
 
-        if job is None:
+        if claimed is None:
             return False
 
+        job = claimed.job
         started = time.perf_counter()
         token = bind(
             job_id=str(job.id),
@@ -219,7 +224,10 @@ class PublishJobService:
             service="worker",
         )
         try:
-            logger.info("publish_job_claimed")
+            if claimed.reclaimed:
+                logger.info("publish_job_reclaimed")
+            else:
+                logger.info("publish_job_claimed")
             try:
                 with self._session.begin_nested():
                     self._publish.publish_campaign(

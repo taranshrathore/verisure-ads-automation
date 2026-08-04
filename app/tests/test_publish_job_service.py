@@ -175,7 +175,8 @@ def test_enqueue_active_running_returns_same_job(db_session: Session) -> None:
     )
     claimed = job_repo.claim_next(datetime.now(timezone.utc))
     assert claimed is not None
-    assert claimed.id == queued.id
+    assert claimed.job.id == queued.id
+    assert claimed.reclaimed is False
     db_session.commit()
 
     again = service.enqueue(

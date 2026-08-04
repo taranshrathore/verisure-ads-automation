@@ -242,8 +242,9 @@ def test_claim_next_claims_oldest_queued_job(
     db_session.refresh(older)
 
     assert claimed is not None
-    assert claimed.id == older.id
-    assert claimed.status == PublishJobStatus.RUNNING
+    assert claimed.reclaimed is False
+    assert claimed.job.id == older.id
+    assert claimed.job.status == PublishJobStatus.RUNNING
     assert older.status == PublishJobStatus.RUNNING
 
 
@@ -273,9 +274,9 @@ def test_claim_next_second_worker_gets_different_job(
 
     assert claimed_first is not None
     assert claimed_second is not None
-    assert claimed_first.id == first.id
-    assert claimed_second.id == second.id
-    assert claimed_first.id != claimed_second.id
+    assert claimed_first.job.id == first.id
+    assert claimed_second.job.id == second.id
+    assert claimed_first.job.id != claimed_second.job.id
 
 
 def test_claim_next_returns_none_when_queue_empty(
@@ -300,7 +301,7 @@ def test_claim_next_increments_attempt_count_exactly_once(
     db_session.refresh(job)
 
     assert claimed is not None
-    assert claimed.attempt_count == 1
+    assert claimed.job.attempt_count == 1
     assert job.attempt_count == 1
 
 
@@ -317,7 +318,7 @@ def test_claim_next_populates_started_at(
     db_session.refresh(job)
 
     assert claimed is not None
-    assert claimed.started_at == started_at
+    assert claimed.job.started_at == started_at
     assert job.started_at == started_at
 
 
@@ -359,7 +360,7 @@ def test_claim_next_is_deterministic_by_created_at_then_id(
     claimed = repo.claim_next(datetime.now(timezone.utc))
 
     assert claimed is not None
-    assert claimed.id == lower_id
+    assert claimed.job.id == lower_id
 
 
 def test_claim_next_skip_locked_gives_different_jobs_to_concurrent_workers() -> None:
@@ -441,9 +442,9 @@ def test_claim_next_skip_locked_gives_different_jobs_to_concurrent_workers() -> 
 
         assert claimed1 is not None
         assert claimed2 is not None
-        assert claimed1.id == job_old_id
-        assert claimed2.id == job_new_id
-        assert claimed1.id != claimed2.id
+        assert claimed1.job.id == job_old_id
+        assert claimed2.job.id == job_new_id
+        assert claimed1.job.id != claimed2.job.id
     finally:
         session1.close()
         session2.close()
@@ -693,7 +694,7 @@ def test_mark_finished_stale_expected_against_terminal_is_no_op(
     assert job.finished_at == now
 
 
-def test_claim_next_does_not_reclaim_running_job(
+def test_claim_next_does_not_reclaim_running_job_without_stale_before(
     repo: PublishJobRepository, db_session: Session
 ) -> None:
     tenant, user, campaign = _make_tenant_user_campaign(db_session, suffix="no-reclaim")
@@ -727,7 +728,8 @@ def test_claim_next_returning_synchronizes_identity_mapped_instance(
 
     claimed = repo.claim_next(started_at)
 
-    assert claimed is job
+    assert claimed is not None
+    assert claimed.job is job
     assert job.status == PublishJobStatus.RUNNING
     assert job.attempt_count == 1
     assert job.started_at == started_at

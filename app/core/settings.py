@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     # Must be >= 1: 0 busy-loops, and a negative value makes time.sleep raise
     # ValueError which run_forever would catch and immediately retry.
     publish_job_poll_interval_seconds: int = Field(default=5, ge=1)
+    # RUNNING jobs whose started_at is older than this many seconds may be
+    # reclaimed by claim_next when no QUEUED job is available (worker crash
+    # recovery). Must be >= 1.
+    publish_job_stale_after_seconds: int = Field(default=900, ge=1)
     # Observability Foundation Phase 1: stdlib logging only.
     log_level: str = "INFO"
     # None => text in development, json in production/staging/prod.
