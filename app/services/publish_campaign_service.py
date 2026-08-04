@@ -114,7 +114,8 @@ class PublishCampaignService:
     Composes CampaignRepository (read the campaign),
     CampaignDeploymentRepository (read existing deployments),
     CampaignDeploymentService (owns the commit for every deployment
-    lifecycle transition), CampaignSpecBuilder, ProviderAdapterRegistry
+    lifecycle transition unless commit=False for an outer unit of work),
+    CampaignSpecBuilder, ProviderAdapterRegistry
     (resolve a provider's adapter), and ProviderConnectionService
     (decrypt credentials for adapter.publish).
     """
@@ -138,7 +139,11 @@ class PublishCampaignService:
         self._session = session
 
     def publish_campaign(
-        self, *, tenant_id: uuid.UUID, campaign_id: uuid.UUID
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        campaign_id: uuid.UUID,
+        commit: bool = True,
     ) -> list[CampaignDeployment]:
         """Ensure a deployment exists for every supported provider, then
         attempt to publish each one that is still PENDING.
@@ -151,6 +156,9 @@ class PublishCampaignService:
         credential decryption failure, an unknown provider, or the
         adapter itself) never prevents the remaining providers from
         being attempted -- see _attempt_provider_publish.
+
+        When commit=False, deployment writes flush only and the caller
+        owns the surrounding transaction (PublishJobService.run_once).
         """
         campaign = self._campaigns.get_by_tenant_and_id(tenant_id, campaign_id)
         if campaign is None:
@@ -171,12 +179,15 @@ class PublishCampaignService:
             )
             if deployment is None:
                 deployment = self._deployment_service.create_pending_deployment(
-                    tenant_id=tenant_id, campaign_id=campaign.id, provider=provider
+                    tenant_id=tenant_id,
+                    campaign_id=campaign.id,
+                    provider=provider,
+                    commit=commit,
                 )
 
             if deployment.status == CampaignDeploymentStatus.PENDING:
                 deployment = self._attempt_provider_publish(
-                    tenant_id, campaign, deployment
+                    tenant_id, campaign, deployment, commit=commit
                 )
                 outcome = (
                     "submitted"
@@ -213,7 +224,12 @@ class PublishCampaignService:
         return self._deployments.list_by_campaign(tenant_id, campaign.id)
 
     def _attempt_provider_publish(
-        self, tenant_id: uuid.UUID, campaign: Campaign, deployment: CampaignDeployment
+        self,
+        tenant_id: uuid.UUID,
+        campaign: Campaign,
+        deployment: CampaignDeployment,
+        *,
+        commit: bool,
     ) -> CampaignDeployment:
         """Build a spec, resolve credentials + adapter, call
         adapter.publish(spec, credentials), and record the outcome.
@@ -233,16 +249,17 @@ class PublishCampaignService:
         This try/except deliberately does NOT wrap the mark_submitted /
         mark_failed calls that record the outcome: those are persistence
         operations, not provider-boundary failures, and
-        CampaignDeploymentService already rolls back and re-raises on
-        any failure of its own (including a failure *while recording* a
-        failure). Letting that propagate uncaught here -- rather than
-        catching it and mislabeling it as "this provider failed" -- is
-        intentional: a persistence/database failure is a different kind
-        of problem than a provider declining a campaign, and swallowing
-        it would both hide a real outage and leave the caller's loop
-        proceeding to the next provider on top of a transaction that may
-        not be trustworthy. So publish_campaign does NOT attempt the
-        remaining providers in that case -- it stops and propagates.
+        CampaignDeploymentService already rolls back (when commit=True)
+        and re-raises on any failure of its own (including a failure
+        *while recording* a failure). Letting that propagate uncaught
+        here -- rather than catching it and mislabeling it as "this
+        provider failed" -- is intentional: a persistence/database
+        failure is a different kind of problem than a provider declining
+        a campaign, and swallowing it would both hide a real outage and
+        leave the caller's loop proceeding to the next provider on top
+        of a transaction that may not be trustworthy. So publish_campaign
+        does NOT attempt the remaining providers in that case -- it
+        stops and propagates.
 
         Decrypted credential bytes never leave this method except inside
         a ProviderCredentials value passed to adapter.publish.
@@ -266,6 +283,7 @@ class PublishCampaignService:
                 last_error_message=_safe_error_message(
                     str(exc), exception_type=type(exc).__name__
                 ),
+                commit=commit,
             )
 
         if result.success:
@@ -273,12 +291,14 @@ class PublishCampaignService:
                 tenant_id=tenant_id,
                 deployment_id=deployment.id,
                 external_campaign_id=result.external_campaign_id,
+                commit=commit,
             )
 
         return self._deployment_service.mark_failed(
             tenant_id=tenant_id,
             deployment_id=deployment.id,
             last_error_message=_safe_error_message(result.error_message),
+            commit=commit,
         )
 
     @staticmethod

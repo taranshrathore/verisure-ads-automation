@@ -111,7 +111,7 @@ class _FakePublish:
         self.error = error
         self.calls: list[tuple] = []
 
-    def publish_campaign(self, *, tenant_id, campaign_id):
+    def publish_campaign(self, *, tenant_id, campaign_id, commit: bool = True):
         self.calls.append((tenant_id, campaign_id))
         if self.error is not None:
             raise self.error
@@ -385,7 +385,7 @@ def test_context_bound_during_claim_and_cleared_after_worker_run_once(
     seen: dict[str, Any] = {}
 
     class _TrackingPublish:
-        def publish_campaign(self, *, tenant_id, campaign_id):
+        def publish_campaign(self, *, tenant_id, campaign_id, commit: bool = True):
             seen.update(get_context())
             return []
 

@@ -35,8 +35,8 @@ class FakePublishCampaignService:
         self.error = error
         self.calls: list[tuple] = []
 
-    def publish_campaign(self, *, tenant_id, campaign_id):
-        self.calls.append((tenant_id, campaign_id))
+    def publish_campaign(self, *, tenant_id, campaign_id, commit: bool = True):
+        self.calls.append((tenant_id, campaign_id, commit))
         if self.error is not None:
             raise self.error
         return []
@@ -332,7 +332,7 @@ def test_run_once_success_marks_succeeded(db_session: Session) -> None:
     )
 
     assert service.run_once() is True
-    assert fake.calls == [(tenant.id, campaign.id)]
+    assert fake.calls == [(tenant.id, campaign.id, False)]
 
     loaded = job_repo.get_by_id(tenant.id, job.id)
     assert loaded is not None
@@ -393,26 +393,27 @@ def test_unexpected_persistence_failure_rolls_back(db_session: Session) -> None:
     assert loaded.attempt_count == 0
 
 
-def test_persistence_failure_after_successful_publish_leaves_running(
+def test_terminal_mark_failure_after_flush_only_publish_rolls_back_claim(
     db_session: Session,
 ) -> None:
-    """If publish commits the claim and both terminal marks fail, stay RUNNING.
+    """Without nested commits, a failed terminal mark rolls back the claim.
 
-    Matches the approved stale-running contract: do not reclaim or auto-fail.
+    Publish no longer commits the claim mid-flight. If both SUCCEEDED and
+    FAILED terminal marks raise, the outer transaction rolls back and the
+    job remains QUEUED (not stuck RUNNING).
     """
 
-    class _CommittingPublish:
-        def __init__(self, session: Session) -> None:
-            self._session = session
-
-        def publish_campaign(self, *, tenant_id, campaign_id):
-            self._session.commit()
+    class _FlushOnlyPublish:
+        def publish_campaign(self, *, tenant_id, campaign_id, commit: bool = True):
+            del tenant_id, campaign_id, commit
             return []
 
-    tenant, user, campaign = _make_tenant_user_campaign(db_session, suffix="run-ok-persist")
-    db_session.commit()
-    publish = _CommittingPublish(db_session)
-    service, job_repo, _ = _make_service(db_session, publish=publish)  # type: ignore[arg-type]
+    tenant, user, campaign = _make_tenant_user_campaign(
+        db_session, suffix="run-ok-persist"
+    )
+    service, job_repo, _ = _make_service(
+        db_session, publish=_FlushOnlyPublish()  # type: ignore[arg-type]
+    )
     job = service.enqueue(
         tenant_id=tenant.id,
         campaign_id=campaign.id,
@@ -433,8 +434,8 @@ def test_persistence_failure_after_successful_publish_leaves_running(
 
     loaded = job_repo.get_by_id(tenant.id, job.id)
     assert loaded is not None
-    assert loaded.status == PublishJobStatus.RUNNING
-    assert loaded.attempt_count == 1
+    assert loaded.status == PublishJobStatus.QUEUED
+    assert loaded.attempt_count == 0
 
 
 def test_repeated_run_once_does_not_reclaim_terminal_job(

@@ -2,9 +2,10 @@
 
 ASYNC PUBLISH PHASE 3 SCOPE: service-layer orchestration only. No HTTP
 API, no worker entrypoint/polling loop. PublishJobService owns all
-transaction commits; PublishJobRepository never commits. The worker
-boundary later must call only this service (then PublishCampaignService),
-never routers or FastAPI Request objects.
+transaction commits for run_once (including deployment writes via
+publish_campaign(commit=False)); PublishJobRepository never commits.
+The worker boundary later must call only this service (then
+PublishCampaignService), never routers or FastAPI Request objects.
 
 Observability: lifecycle logs only (enqueue/claim/succeed/fail). Business
 failures are logged once here; the worker must not re-log them as
@@ -186,6 +187,13 @@ class PublishJobService:
     def run_once(self) -> bool:
         """Claim one queued job, run publish, and mark the job terminal.
 
+        Single unit of work for the worker path: claim, publish
+        (deployments flush-only), and terminal job mark share one outer
+        transaction. A savepoint wraps publish + success mark so a
+        failure rolls back deployment work while leaving the claim in
+        the outer transaction long enough to mark the job FAILED, then
+        one commit (or a full rollback if that also fails).
+
         Returns False when the queue is empty. Returns True after a
         successful publish + SUCCEEDED transition. When publish (or the
         success mark) fails, marks the job FAILED (when still RUNNING),
@@ -213,22 +221,24 @@ class PublishJobService:
         try:
             logger.info("publish_job_claimed")
             try:
-                self._publish.publish_campaign(
-                    tenant_id=job.tenant_id,
-                    campaign_id=job.campaign_id,
-                )
-                finished_at = datetime.now(timezone.utc)
-                affected = self._jobs.mark_finished(
-                    job.tenant_id,
-                    job.id,
-                    PublishJobStatus.RUNNING,
-                    PublishJobStatus.SUCCEEDED,
-                    finished_at,
-                )
-                if affected != 1:
-                    raise RuntimeError(
-                        "Publish job could not be marked succeeded."
+                with self._session.begin_nested():
+                    self._publish.publish_campaign(
+                        tenant_id=job.tenant_id,
+                        campaign_id=job.campaign_id,
+                        commit=False,
                     )
+                    finished_at = datetime.now(timezone.utc)
+                    affected = self._jobs.mark_finished(
+                        job.tenant_id,
+                        job.id,
+                        PublishJobStatus.RUNNING,
+                        PublishJobStatus.SUCCEEDED,
+                        finished_at,
+                    )
+                    if affected != 1:
+                        raise RuntimeError(
+                            "Publish job could not be marked succeeded."
+                        )
                 self._session.commit()
                 duration_ms = int((time.perf_counter() - started) * 1000)
                 with bound_context(duration_ms=duration_ms):

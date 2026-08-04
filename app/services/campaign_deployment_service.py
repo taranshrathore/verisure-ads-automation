@@ -1,16 +1,18 @@
 """CampaignDeployment lifecycle service.
 
-CampaignDeploymentService owns all transaction commits;
+CampaignDeploymentService owns transaction commits for standalone
+lifecycle calls (commit=True, the default). When participating in an
+outer unit of work -- notably PublishJobService.run_once -- callers pass
+commit=False so this service only flushes and never commits or rolls
+back; the outer owner performs the single commit/rollback.
+
 CampaignDeploymentRepository never commits. Every method takes tenant_id
 explicitly and is tenant-scoped throughout.
 
 Every public method that writes wraps its full read-validate-write(s)
-sequence in a single try/except that rolls back on ANY exception
-(domain exception or persistence failure alike) before re-raising --
-never leaving a partially-applied, uncommitted transaction (or a
-session stuck needing a rollback it never got) behind for the next
-caller (added in the Milestone 5 audit; see mark_submitted's
-docstring for the specific failure mode this closes).
+sequence in a single try/except. With commit=True it rolls back on ANY
+exception before re-raising. With commit=False it re-raises without
+rolling back so the outer unit of work retains ownership.
 
 MILESTONE 2 PHASE 3 SCOPE: deployment lifecycle persistence and
 state-transition enforcement only. No provider adapters, no provider API
@@ -72,6 +74,7 @@ class CampaignDeploymentService:
         tenant_id: uuid.UUID,
         campaign_id: uuid.UUID,
         provider: Provider,
+        commit: bool = True,
     ) -> CampaignDeployment:
         """Create a new pending deployment for one campaign+provider pair.
 
@@ -80,9 +83,9 @@ class CampaignDeploymentService:
         Does not check for an existing deployment on the same
         (campaign_id, provider) pair; that is enforced structurally by
         uq_campaign_deployments_campaign_id_provider, and a violation
-        surfaces as an IntegrityError. Translating that into a domain
-        exception is deferred -- it is not deployment lifecycle
-        persistence and was not in this phase's scope.
+        surfaces as an IntegrityError.
+
+        When commit=False, stages/flushes only for an outer unit of work.
         """
         deployment = CampaignDeployment(
             tenant_id=tenant_id,
@@ -93,9 +96,9 @@ class CampaignDeploymentService:
         )
         try:
             self._deployments.create(deployment)
-            self._session.commit()
+            self._finish_write(commit=commit, refresh=deployment)
         except Exception:
-            self._session.rollback()
+            self._abort_write(commit=commit)
             raise
         return deployment
 
@@ -105,19 +108,14 @@ class CampaignDeploymentService:
         tenant_id: uuid.UUID,
         deployment_id: uuid.UUID,
         external_campaign_id: str,
+        commit: bool = True,
     ) -> CampaignDeployment:
         """Transition pending -> submitted, recording the provider's ID.
 
         The transition UPDATE and the external_campaign_id UPDATE are
-        one atomic unit: if update_external_reference (or anything else
-        in this method) raises before commit, the whole transaction --
-        including _apply_transition's already-executed-but-uncommitted
-        status UPDATE -- is rolled back rather than left half-applied
-        in an open, uncommitted transaction. Without this, a failure here
-        could otherwise leave the row already flipped to SUBMITTED (with
-        no external_campaign_id) sitting uncommitted, and would leave the
-        session unable to safely run any further statement until
-        something rolls it back.
+        one atomic unit under the caller's commit mode. When commit=True,
+        a failure rolls back the whole method. When commit=False, the
+        outer unit of work owns rollback.
         """
         try:
             deployment = self._apply_transition(
@@ -133,15 +131,18 @@ class CampaignDeploymentService:
             self._deployments.update_external_reference(
                 tenant_id, deployment_id, external_campaign_id
             )
-            self._session.commit()
+            self._finish_write(commit=commit, refresh=deployment)
         except Exception:
-            self._session.rollback()
+            self._abort_write(commit=commit)
             raise
-        self._session.refresh(deployment)
         return deployment
 
     def mark_live(
-        self, *, tenant_id: uuid.UUID, deployment_id: uuid.UUID
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        deployment_id: uuid.UUID,
+        commit: bool = True,
     ) -> CampaignDeployment:
         """Transition submitted -> live or paused -> live, recording
         confirmation time."""
@@ -152,11 +153,10 @@ class CampaignDeploymentService:
                 CampaignDeploymentStatus.LIVE,
                 confirmed_at=datetime.now(timezone.utc),
             )
-            self._session.commit()
+            self._finish_write(commit=commit, refresh=deployment)
         except Exception:
-            self._session.rollback()
+            self._abort_write(commit=commit)
             raise
-        self._session.refresh(deployment)
         return deployment
 
     def mark_failed(
@@ -165,6 +165,7 @@ class CampaignDeploymentService:
         tenant_id: uuid.UUID,
         deployment_id: uuid.UUID,
         last_error_message: str,
+        commit: bool = True,
     ) -> CampaignDeployment:
         """Transition pending -> failed or submitted -> failed, recording
         the error message."""
@@ -175,27 +176,44 @@ class CampaignDeploymentService:
                 CampaignDeploymentStatus.FAILED,
                 last_error_message=last_error_message,
             )
-            self._session.commit()
+            self._finish_write(commit=commit, refresh=deployment)
         except Exception:
-            self._session.rollback()
+            self._abort_write(commit=commit)
             raise
-        self._session.refresh(deployment)
         return deployment
 
     def mark_paused(
-        self, *, tenant_id: uuid.UUID, deployment_id: uuid.UUID
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        deployment_id: uuid.UUID,
+        commit: bool = True,
     ) -> CampaignDeployment:
         """Transition live -> paused."""
         try:
             deployment = self._apply_transition(
                 tenant_id, deployment_id, CampaignDeploymentStatus.PAUSED
             )
-            self._session.commit()
+            self._finish_write(commit=commit, refresh=deployment)
         except Exception:
-            self._session.rollback()
+            self._abort_write(commit=commit)
             raise
-        self._session.refresh(deployment)
         return deployment
+
+    def _finish_write(
+        self, *, commit: bool, refresh: CampaignDeployment
+    ) -> None:
+        """Commit or flush after a successful write sequence."""
+        if commit:
+            self._session.commit()
+        else:
+            self._session.flush()
+        self._session.refresh(refresh)
+
+    def _abort_write(self, *, commit: bool) -> None:
+        """Rollback only when this service owns the transaction."""
+        if commit:
+            self._session.rollback()
 
     def _apply_transition(
         self,
