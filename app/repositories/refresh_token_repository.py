@@ -25,6 +25,18 @@ class RefreshTokenRepository:
             select(RefreshToken).where(RefreshToken.token_hash == token_hash)
         )
 
+    def get_by_token_hash_for_update(self, token_hash: str) -> RefreshToken | None:
+        """Return a refresh token by hash, locking the row until commit/rollback.
+
+        Uses SELECT ... FOR UPDATE so concurrent refresh attempts serialize
+        on this row. Does not commit or roll back.
+        """
+        return self._session.scalar(
+            select(RefreshToken)
+            .where(RefreshToken.token_hash == token_hash)
+            .with_for_update()
+        )
+
     def mark_replaced(self, token_id: UUID, replaced_by_token_id: UUID) -> None:
         """Set replaced_by_token_id on an existing refresh token."""
         self._session.execute(
@@ -40,6 +52,34 @@ class RefreshTokenRepository:
             .where(RefreshToken.id == token_id)
             .values(revoked_at=datetime.now(timezone.utc))
         )
+
+    def claim_rotation(
+        self,
+        token_id: UUID,
+        *,
+        replaced_by_token_id: UUID,
+        revoked_at: datetime,
+    ) -> int:
+        """Atomically rotate a still-active parent refresh token.
+
+        Succeeds only when the row is still unrevoked and unreplaced
+        (UPDATE ... WHERE revoked_at IS NULL AND replaced_by_token_id IS NULL).
+        Returns affected row count (1 on success, 0 on lost race / mismatch).
+        Does not commit or roll back.
+        """
+        result = self._session.execute(
+            update(RefreshToken)
+            .where(
+                RefreshToken.id == token_id,
+                RefreshToken.revoked_at.is_(None),
+                RefreshToken.replaced_by_token_id.is_(None),
+            )
+            .values(
+                replaced_by_token_id=replaced_by_token_id,
+                revoked_at=revoked_at,
+            )
+        )
+        return result.rowcount
 
     def revoke_family(self, family_id: UUID) -> None:
         """Set revoked_at on all active tokens in a family."""

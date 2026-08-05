@@ -86,17 +86,16 @@ class AuthService:
 
         return TokenPair(access_token=access_token, refresh_token=raw_refresh_token)
 
-    # TODO: This implementation is vulnerable to concurrent refresh requests
-    # using the same token (a TOCTOU race): two simultaneous calls can both
-    # read the token as valid before either commits, resulting in two
-    # rotations from the same parent. Upgrade this to either a
-    # SELECT ... FOR UPDATE row lock on the existing token before rotating,
-    # or an atomic conditional UPDATE (e.g. UPDATE ... WHERE id = ? AND
-    # revoked_at IS NULL AND replaced_by_token_id IS NULL) and check the
-    # affected row count to guarantee only one successful rotation per token.
     def refresh(self, raw_refresh_token: str) -> TokenPair:
-        """Validate and rotate a refresh token, revoking its family on reuse."""
-        existing = self._refresh_tokens.get_by_token_hash(hash_token(raw_refresh_token))
+        """Validate and rotate a refresh token, revoking its family on reuse.
+
+        Concurrent refresh of the same parent is serialized with
+        SELECT ... FOR UPDATE, then claimed via a conditional UPDATE so
+        exactly one winner rotates; losers observe the rotated parent and
+        fail (reuse / revoked) without issuing a second child token.
+        """
+        token_hash = hash_token(raw_refresh_token)
+        existing = self._refresh_tokens.get_by_token_hash_for_update(token_hash)
         if existing is None:
             raise InvalidRefreshTokenError()
 
@@ -117,19 +116,45 @@ class AuthService:
         if existing.expires_at <= now:
             raise RefreshTokenExpiredError()
 
+        # Capture before mutation/commit so identity-map expiry cannot bite.
+        user_id = existing.user_id
+        tenant_id = existing.user.tenant_id
+        parent_id = existing.id
+        family_id = existing.family_id
+
         new_token_id = uuid.uuid4()
         raw_new_refresh_token = generate_refresh_token()
 
         new_token = RefreshToken(
             id=new_token_id,
-            user_id=existing.user_id,
-            family_id=existing.family_id,
+            user_id=user_id,
+            family_id=family_id,
             token_hash=hash_token(raw_new_refresh_token),
             expires_at=now + _REFRESH_TOKEN_LIFETIME,
         )
         self._refresh_tokens.create(new_token)
-        self._refresh_tokens.mark_replaced(existing.id, new_token_id)
-        self._refresh_tokens.revoke(existing.id)
+        # Child must exist before the parent FK claim_rotation write.
+        self._session.flush()
+
+        affected = self._refresh_tokens.claim_rotation(
+            parent_id,
+            replaced_by_token_id=new_token_id,
+            revoked_at=now,
+        )
+        if affected != 1:
+            self._session.rollback()
+            raced = self._refresh_tokens.get_by_token_hash(token_hash)
+            if raced is not None and raced.replaced_by_token_id is not None:
+                self._refresh_tokens.revoke_family(raced.family_id)
+                try:
+                    self._session.commit()
+                except Exception:
+                    self._session.rollback()
+                    raise
+                raise RefreshTokenReuseError()
+            if raced is not None and raced.revoked_at is not None:
+                raise RefreshTokenRevokedError()
+            raise InvalidRefreshTokenError()
 
         try:
             self._session.commit()
@@ -137,9 +162,7 @@ class AuthService:
             self._session.rollback()
             raise
 
-        access_token = create_access_token(
-            user_id=existing.user_id, tenant_id=existing.user.tenant_id
-        )
+        access_token = create_access_token(user_id=user_id, tenant_id=tenant_id)
 
         return TokenPair(access_token=access_token, refresh_token=raw_new_refresh_token)
 
